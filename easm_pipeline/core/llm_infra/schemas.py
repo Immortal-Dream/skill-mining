@@ -1,4 +1,4 @@
-"""Strict data contracts shared between EASM pipeline stages.
+﻿"""Strict data contracts shared between EASM pipeline stages.
 
 These models are deliberately deterministic. They do not import or call any
 LLM client code, so extraction can produce instances without depending on
@@ -335,3 +335,5 @@ class SkillPayload(StrictModel):
         """Return the YAML frontmatter fields required by Claude Agent Skills."""
 
         return {"name": self.name, "description": self.description}
+
+

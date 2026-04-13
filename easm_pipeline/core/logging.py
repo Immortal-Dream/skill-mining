@@ -1,4 +1,4 @@
-"""Central loguru configuration for the EASM pipeline."""
+﻿"""Central loguru configuration for the EASM pipeline."""
 
 from __future__ import annotations
 
@@ -38,4 +38,6 @@ def configure_logging(level: str | None = None) -> None:
 
 
 configure_logging()
+
+
 
