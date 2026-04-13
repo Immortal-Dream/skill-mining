@@ -1,17 +1,53 @@
-import tempfile
+﻿import tempfile
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 
 from easm_pipeline.core.llm_infra.schemas import CapabilitySlice, ExtractedNode, SkillPayload
-from easm_pipeline.extraction.java_miner import JavaMiner
-from easm_pipeline.extraction.python_miner import PythonMiner
-from easm_pipeline.main_pipeline import EASMPipeline, PipelineConfig
-from easm_pipeline.packaging.filesystem_builder import FilesystemBuilder
-from easm_pipeline.packaging.validator import SkillValidationError, SkillValidator
-from easm_pipeline.synthesis.code_bundler import CodeBundler
-from easm_pipeline.synthesis.instruction_writer import SkillInstructions
+from easm_pipeline.source_to_skills.extraction.java_miner import JavaMiner
+from easm_pipeline.source_to_skills.extraction.dependency_resolver import DependencyResolver
+from easm_pipeline.source_to_skills.extraction.python_miner import PythonMiner
+from easm_pipeline.source_to_skills.main_pipeline import EASMPipeline, PipelineConfig
+from easm_pipeline.source_to_skills.mining.candidate_evaluator import CandidateEvaluator
+from easm_pipeline.source_to_skills.packaging.filesystem_builder import FilesystemBuilder
+from easm_pipeline.source_to_skills.packaging.validator import SkillValidationError, SkillValidator
+from easm_pipeline.source_to_skills.script_mining.script_generator import ScriptGenerator
+from easm_pipeline.source_to_skills.script_mining.script_validator import ScriptValidator
+from easm_pipeline.source_to_skills.synthesis.code_bundler import CodeBundler
+from easm_pipeline.source_to_skills.synthesis.instruction_writer import SkillInstructions
+from easm_pipeline.source_to_skills.synthesis.skill_doc_generator import SkillDoc
+
+
+def _valid_skill_body(extra_quick_start: str | None = None) -> str:
+    quick_start = (
+        "1. Run help:\n"
+        "   ```bash\n"
+        "   python scripts/run.py --help\n"
+        "   ```\n"
+        "2. Run with example input:\n"
+        "   ```bash\n"
+        "   python scripts/run.py --value 'sample' --output json\n"
+        "   ```\n"
+        "3. Read stdout as result. Check stderr only on failure."
+    )
+    if extra_quick_start:
+        quick_start = f"{quick_start}\n4. {extra_quick_start.lstrip('0123456789. ')}"
+    return (
+        "# Valid Skill\n\n"
+        "## Quick start\n\n"
+        f"{quick_start}\n\n"
+        "## Scripts\n\n"
+        "- `scripts/run.py` - black-box helper.\n\n"
+        "## Inputs\n\n"
+        "- `--value` (required): Example value.\n"
+        "- `--output` (optional, default: json): Output format.\n\n"
+        "## Output\n\n"
+        "stdout contains JSON results. stderr contains errors.\n\n"
+        "## When to use\n\n"
+        "Use when: testing validation.\n\n"
+        "Do not use when: references are missing."
+    )
 
 
 class ExtractionTests(unittest.TestCase):
@@ -110,6 +146,25 @@ class SynthesisPackagingTests(unittest.TestCase):
 
         self.assertIn("## Quick Start", instructions.instructions)
 
+    def test_skill_doc_rejects_none_helper_script_and_parenthesized_steps(self) -> None:
+        with self.assertRaises(ValueError):
+            SkillDoc(
+                instructions=(
+                    "# Demo\n\n"
+                    "## Scripts\n\n"
+                    "None.\n\n"
+                    "## Quick start\n\n"
+                    "1) Run python scripts/demo.py --help\n\n"
+                    "## Inputs\n\n"
+                    "- `--value` (required): Example.\n\n"
+                    "## Output\n\n"
+                    "stdout contains JSON. stderr contains errors.\n\n"
+                    "## When to use\n\n"
+                    "Use when: demo.\n\n"
+                    "Do not use when: not demo."
+                )
+            )
+
     def test_code_bundler_quarantines_dangerous_python_code(self) -> None:
         node = ExtractedNode(
             node_id="demo",
@@ -193,11 +248,58 @@ class SynthesisPackagingTests(unittest.TestCase):
         self.assertEqual(run_result.returncode, 0)
         self.assertEqual(run_result.stdout.strip(), "5")
 
+    def test_script_generator_distills_semantic_cli_script(self) -> None:
+        source = """
+def find_connected_components(edges: list[tuple[str, str]]) -> list[set[str]]:
+    \"\"\"Find connected components in an undirected graph.\"\"\"
+    graph: dict[str, set[str]] = {}
+    for left, right in edges:
+        graph.setdefault(left, set()).add(right)
+        graph.setdefault(right, set()).add(left)
+    return [set(graph)]
+"""
+        node = PythonMiner(prefer_tree_sitter=True, allow_ast_fallback=True).mine_source(
+            source,
+            file_path="graph_tools.py",
+        )[0]
+        capability = CapabilitySlice(slice_id="graph", title="Graph", nodes=(node,))
+        dependencies = DependencyResolver().resolve(capability)
+        decision = CandidateEvaluator().evaluate(capability, dependencies)
+        script = ScriptGenerator().generate_fallback(capability, dependencies, decision)
+        validation = ScriptValidator().validate(script)
+
+        self.assertTrue(validation.passed, validation.json())
+        self.assertEqual(decision.skill_id, "find-connected-components")
+        self.assertEqual(script.filename, "find_connected_components.py")
+        self.assertIn("--edges-json", script.script_text)
+        self.assertIn("def core_function", script.script_text)
+
+    def test_candidate_evaluator_skips_bound_methods(self) -> None:
+        node = ExtractedNode(
+            node_id="method-demo",
+            language="python",
+            node_type="function",
+            name="build_title",
+            signature="def build_title(self, project: str) -> str",
+            raw_code="    def build_title(self, project: str) -> str:\n        return self.prefix + project\n",
+            file_path="report.py",
+            start_byte=0,
+            end_byte=78,
+            start_line=2,
+            end_line=3,
+            scope_path=("ReportBuilder",),
+        )
+        capability = CapabilitySlice(slice_id="report", title="Report", nodes=(node,))
+        decision = CandidateEvaluator().evaluate(capability, DependencyResolver().resolve(capability))
+
+        self.assertEqual(decision.decision, "skip")
+        self.assertIn("instance", decision.reason)
+
     def test_validator_rejects_missing_reference_link(self) -> None:
         payload = SkillPayload(
             name="valid-skill",
             description="Use when testing validation. Do not use when references are missing.",
-            instructions="# Valid Skill\n\n## Helper Scripts Available\n\n- none\n\n## Quick Start\n\n1. Read `references/missing.md`.",
+            instructions=_valid_skill_body(extra_quick_start="1. Read `references/missing.md`."),
         )
 
         with self.assertRaises(SkillValidationError):
@@ -207,18 +309,7 @@ class SynthesisPackagingTests(unittest.TestCase):
         payload = SkillPayload(
             name="valid-skill",
             description="Use when testing validation. Do not use when references are missing.",
-            instructions=(
-                "# Valid Skill\n\n"
-                "## Helper Scripts Available\n\n"
-                "- `scripts/run.py` - black-box helper.\n\n"
-                "## Quick Start\n\n"
-                "1. Execute `scripts/run.py`.\n\n"
-                "## Running Bundled Scripts\n\n"
-                "```bash\n"
-                "python scripts/run.py --help\n"
-                "python scripts/run.py --args-json '[]'\n"
-                "```"
-            ),
+            instructions=_valid_skill_body(),
             scripts_dict={"run.py": "print('ok')\n"},
         )
 
@@ -232,10 +323,15 @@ class SynthesisPackagingTests(unittest.TestCase):
             description="Use when testing validation. Do not use when script guidance is missing.",
             instructions=(
                 "# Valid Skill\n\n"
-                "## Helper Scripts Available\n\n"
-                "- `scripts/run.py` - black-box helper.\n\n"
-                "## Quick Start\n\n"
-                "1. Execute `scripts/run.py` after review."
+                "## Quick start\n\n"
+                "1. Execute `scripts/run.py` after review.\n\n"
+                "## Inputs\n\n"
+                "- `--value` (required): Example.\n\n"
+                "## Output\n\n"
+                "stdout contains JSON. stderr contains errors.\n\n"
+                "## When to use\n\n"
+                "Use when: testing.\n\n"
+                "Do not use when: production."
             ),
             scripts_dict={"run.py": "print('ok')\n"},
         )
@@ -243,7 +339,7 @@ class SynthesisPackagingTests(unittest.TestCase):
         with self.assertRaises(SkillValidationError) as raised:
             SkillValidator().validate(payload)
 
-        self.assertIn("## Running Bundled Scripts", str(raised.exception))
+        self.assertIn("## Scripts", str(raised.exception))
 
     def test_validator_rejects_parenthesized_quick_start_numbering(self) -> None:
         payload = SkillPayload(
@@ -251,15 +347,17 @@ class SynthesisPackagingTests(unittest.TestCase):
             description="Use when testing validation. Do not use when numbering is invalid.",
             instructions=(
                 "# Valid Skill\n\n"
-                "## Helper Scripts Available\n\n"
+                "## Scripts\n\n"
                 "- `scripts/run.py` - black-box helper.\n\n"
-                "## Quick Start\n\n"
+                "## Quick start\n\n"
                 "1) Execute `scripts/run.py` after review.\n\n"
-                "## Running Bundled Scripts\n\n"
-                "```bash\n"
-                "python scripts/run.py --help\n"
-                "python scripts/run.py --args-json '[]'\n"
-                "```"
+                "## Inputs\n\n"
+                "- `--value` (required): Example.\n\n"
+                "## Output\n\n"
+                "stdout contains JSON. stderr contains errors.\n\n"
+                "## When to use\n\n"
+                "Use when: testing.\n\n"
+                "Do not use when: production."
             ),
             scripts_dict={"run.py": "print('ok')\n"},
         )
@@ -273,18 +371,7 @@ class SynthesisPackagingTests(unittest.TestCase):
         payload = SkillPayload(
             name="valid-skill",
             description="Use when testing filesystem writes. Do not use when no write is needed.",
-            instructions=(
-                "# Valid Skill\n\n"
-                "## Helper Scripts Available\n\n"
-                "- `scripts/run.py` - black-box helper.\n\n"
-                "## Quick Start\n\n"
-                "1. Execute `scripts/run.py` after review.\n\n"
-                "## Running Bundled Scripts\n\n"
-                "```bash\n"
-                "python scripts/run.py --help\n"
-                "python scripts/run.py --args-json '[]'\n"
-                "```"
-            ),
+            instructions=_valid_skill_body(),
             scripts_dict={"run.py": "print('ok')\n"},
             references_dict={"notes.md": "Reference notes.\n"},
         )
@@ -316,8 +403,13 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(len(result.capabilities), 1)
             self.assertEqual(len(result.skill_dirs), 1)
             self.assertTrue((result.skill_dirs[0] / "SKILL.md").exists())
+            self.assertEqual(result.skill_dirs[0].parent, output_dir.resolve())
+            self.assertEqual(result.skill_dirs[0].name, "run")
             self.assertTrue((result.skill_dirs[0] / "scripts" / "run.py").exists())
+            self.assertTrue((output_dir / "skills_registry.json").exists())
 
 
 if __name__ == "__main__":
     unittest.main()
+
+

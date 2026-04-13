@@ -1,4 +1,4 @@
-"""Structured-output LLM client wrapper isolated from extraction logic.
+﻿"""Structured-output LLM client wrapper isolated from extraction logic.
 
 The default provider is Right Codes, using the OpenAI-style chat completions
 endpoint shown in project configuration:
@@ -550,3 +550,5 @@ def _post_json_with_stdlib(
     except json.JSONDecodeError:
         logger.warning("Provider returned non-JSON response")
         raise LLMTransientError("provider returned non-JSON response") from None
+
+
