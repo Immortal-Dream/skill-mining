@@ -12,6 +12,7 @@ running it.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from easm_pipeline.core.llm_infra.clients import LLMClientConfig, StructuredLLMClient
@@ -19,7 +20,7 @@ from easm_pipeline.main_pipeline import EASMPipeline, PipelineConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIR = REPO_ROOT / "data" / "sample_python_source"
-OUTPUT_DIR = REPO_ROOT / "data" / "output_skills"
+OUTPUT_DIR = REPO_ROOT / "output_skills"
 
 
 def test_mine_sample_python_source_to_output_skills() -> None:
@@ -55,9 +56,11 @@ def test_mine_sample_python_source_to_output_skills() -> None:
 
     assert result.capabilities, "Expected at least one mined capability"
     assert result.skill_dirs, "Expected at least one generated skill directory"
+    assert (OUTPUT_DIR / "skills_registry.json").is_file()
+    assert any((OUTPUT_DIR / "scripts").glob("skill_*.py"))
     for skill_dir in result.skill_dirs:
         assert skill_dir.is_dir()
-        assert skill_dir.parent == OUTPUT_DIR
+        assert skill_dir.parent == OUTPUT_DIR / "skills"
         skill_md = skill_dir / "SKILL.md"
         assert skill_md.is_file()
         assert not (skill_dir / "LICENSE.txt").exists()
@@ -67,7 +70,8 @@ def test_mine_sample_python_source_to_output_skills() -> None:
         assert "## Quick Start" in body
         assert "## Running Bundled Scripts" in body
         assert "--help" in body
-        assert "--args-json" in body or "--kwargs-json" in body
+        assert "None." not in body
+        assert not re.search(r"^\d+\)", body, flags=re.MULTILINE)
         assert not any(ord(char) > 127 for char in body)
         print(f"generated skill: {skill_dir}")
 

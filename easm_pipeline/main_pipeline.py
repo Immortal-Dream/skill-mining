@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from loguru import logger
@@ -17,12 +17,20 @@ from easm_pipeline.core.llm_infra.clients import (
 )
 from easm_pipeline.core.llm_infra.schemas import CapabilitySlice, ExtractedNode, SkillPayload
 from easm_pipeline.extraction.common import iter_source_files, slugify
+from easm_pipeline.extraction.dependency_resolver import DependencyResolver
 from easm_pipeline.extraction.java_miner import JavaMiner
 from easm_pipeline.extraction.python_miner import PythonMiner
+from easm_pipeline.mining.candidate_evaluator import CandidateEvaluator
+from easm_pipeline.mining.candidate_schema import CandidateDecision
 from easm_pipeline.packaging.filesystem_builder import FilesystemBuilder
+from easm_pipeline.packaging.registered_skill import RegisteredSkillPackage
+from easm_pipeline.packaging.registry_builder import RegistryBuilder
+from easm_pipeline.script_mining.script_generator import ScriptGenerator
+from easm_pipeline.script_mining.script_validator import ScriptValidator
 from easm_pipeline.synthesis.code_bundler import CodeBundler
 from easm_pipeline.synthesis.instruction_writer import InstructionWriter
 from easm_pipeline.synthesis.metadata_generator import MetadataGenerator
+from easm_pipeline.synthesis.skill_doc_generator import SkillDocGenerator
 from easm_pipeline.synthesis.skill_reviewer import SkillInstructionReviewer
 
 
@@ -44,6 +52,8 @@ class PipelineResult:
 
     capabilities: tuple[CapabilitySlice, ...]
     skill_dirs: tuple[Path, ...]
+    packages: tuple[RegisteredSkillPackage, ...] = field(default_factory=tuple)
+    skipped: tuple[CandidateDecision, ...] = field(default_factory=tuple)
 
 
 class EASMPipeline:
@@ -64,7 +74,13 @@ class EASMPipeline:
         self.instruction_writer = InstructionWriter(config.llm_client)
         self.skill_reviewer = SkillInstructionReviewer(config.llm_client)
         self.code_bundler = CodeBundler()
+        self.dependency_resolver = DependencyResolver()
+        self.candidate_evaluator = CandidateEvaluator(config.llm_client)
+        self.script_generator = ScriptGenerator(config.llm_client)
+        self.script_validator = ScriptValidator()
+        self.skill_doc_generator = SkillDocGenerator(config.llm_client)
         self.filesystem_builder = FilesystemBuilder()
+        self.registry_builder = RegistryBuilder()
 
     def run(self) -> PipelineResult:
         logger.info(
@@ -77,26 +93,42 @@ class EASMPipeline:
         capabilities = tuple(self.extract_capabilities())
         logger.info("Extracted {} capability slice(s)", len(capabilities))
         skill_dirs: list[Path] = []
-        used_names: set[str] = set()
+        packages: list[RegisteredSkillPackage] = []
+        skipped: list[CandidateDecision] = []
         for capability in capabilities:
             logger.info(
-                "Synthesizing skill payload for slice={} title={} node_count={}",
+                "Mining script-first skill for slice={} title={} node_count={}",
                 capability.slice_id,
                 capability.title,
                 len(capability.nodes),
             )
-            payload = self.synthesize_payload(capability)
-            payload = _dedupe_payload_name(payload, used_names)
-            used_names.add(payload.name)
-            skill_dir = self.filesystem_builder.build(
-                payload,
+            package = self.mine_registered_skill(capability)
+            if package is None:
+                decision = self._last_skip_decision
+                if decision is not None:
+                    skipped.append(decision)
+                continue
+            skill_dir = self.filesystem_builder.build_registered_skill(
+                package,
                 self.config.output_dir,
                 overwrite=self.config.overwrite,
             )
             logger.info("Wrote skill directory: {}", skill_dir)
             skill_dirs.append(skill_dir)
-        logger.info("Completed EASM Stage 1 run: generated_skills={}", len(skill_dirs))
-        return PipelineResult(capabilities=capabilities, skill_dirs=tuple(skill_dirs))
+            packages.append(package)
+        if packages:
+            self.registry_builder.update(self.config.output_dir, tuple(packages))
+        logger.info(
+            "Completed EASM Stage 1 run: generated_skills={} skipped={}",
+            len(skill_dirs),
+            len(skipped),
+        )
+        return PipelineResult(
+            capabilities=capabilities,
+            skill_dirs=tuple(skill_dirs),
+            packages=tuple(packages),
+            skipped=tuple(skipped),
+        )
 
     def extract_capabilities(self) -> list[CapabilitySlice]:
         source_dir = self.config.source_dir.resolve()
@@ -116,10 +148,56 @@ class EASMPipeline:
                 logger.debug("No extractable nodes found: {}", source_file)
                 continue
             logger.info("Extracted {} node(s) from {}", len(nodes), source_file)
-            capabilities.append(_capability_from_nodes(source_file, source_dir, nodes))
+            for node in nodes:
+                capabilities.append(_capability_from_nodes(source_file, source_dir, [node]))
         return capabilities
 
+    _last_skip_decision: CandidateDecision | None = None
+
+    def mine_registered_skill(self, capability: CapabilitySlice) -> RegisteredSkillPackage | None:
+        self._last_skip_decision = None
+        dependencies = self.dependency_resolver.resolve(capability, self.config.source_dir)
+        decision = self.candidate_evaluator.evaluate(capability, dependencies)
+        if decision.decision == "skip":
+            self._last_skip_decision = decision
+            logger.info("Skipped capability: slice={} reason={}", capability.slice_id, decision.reason)
+            return None
+
+        script = self.script_generator.generate(capability, dependencies, decision)
+        validation = self.script_validator.validate(script)
+        if not validation.passed and self.config.llm_client is not None:
+            logger.warning(
+                "LLM-generated script failed validation; falling back to deterministic script: skill_id={}",
+                decision.skill_id,
+            )
+            script = self.script_generator.generate_fallback(capability, dependencies, decision)
+            validation = self.script_validator.validate(script)
+        if not validation.passed:
+            self._last_skip_decision = decision.copy(
+                update={"decision": "skip", "skill_id": None, "reason": "generated script failed validation"}
+            )
+            logger.warning("Skipped invalid generated script: skill_id={}", decision.skill_id)
+            return None
+
+        try:
+            skill_doc = self.skill_doc_generator.generate(script=script, decision=decision, validation=validation)
+        except Exception:
+            logger.warning("LLM-generated SKILL.md failed validation; falling back to deterministic doc: {}", script.skill_id)
+            skill_doc = self.skill_doc_generator.generate_fallback(script=script, decision=decision, validation=validation)
+
+        node = capability.nodes[0]
+        return RegisteredSkillPackage(
+            decision=decision,
+            script=script,
+            skill_doc=skill_doc,
+            validation=validation,
+            source_file=node.file_path,
+            source_span={"start_line": node.start_line, "end_line": node.end_line},
+        )
+
     def synthesize_payload(self, capability: CapabilitySlice) -> SkillPayload:
+        """Legacy payload synthesis retained for callers that still use the old layout."""
+
         # Code is bundled before LLM synthesis so prompts can reference approved
         # script names without asking the model to decide execution safety.
         bundle = self.code_bundler.bundle(capability)
@@ -161,9 +239,10 @@ class EASMPipeline:
 
 def _capability_from_nodes(source_file: Path, source_root: Path, nodes: list[ExtractedNode]) -> CapabilitySlice:
     relative = source_file.resolve().relative_to(source_root.resolve()).as_posix()
-    title = source_file.stem.replace("_", " ").replace("-", " ").title()
+    node_label = nodes[0].name if len(nodes) == 1 else source_file.stem
+    title = node_label.replace("_", " ").replace("-", " ").title()
     return CapabilitySlice(
-        slice_id=slugify(relative, max_length=64),
+        slice_id=slugify(f"{relative}-{node_label}", max_length=64),
         title=title,
         nodes=tuple(nodes),
         summary=f"Extracted {len(nodes)} callable node(s) from {relative}.",

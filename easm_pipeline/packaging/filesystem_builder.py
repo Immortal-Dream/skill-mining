@@ -14,6 +14,7 @@ from loguru import logger
 
 from easm_pipeline.core.llm_infra.schemas import SkillPayload
 
+from .registered_skill import RegisteredSkillPackage
 from .validator import SkillValidator
 
 
@@ -71,10 +72,62 @@ class FilesystemBuilder:
 
         return target_dir
 
+    def build_registered_skill(
+        self,
+        package: RegisteredSkillPackage,
+        output_root: Path,
+        *,
+        overwrite: bool = False,
+    ) -> Path:
+        """Write script-first skill assets under output_root.
+
+        The script is global under scripts/ so registry entries can address it
+        directly. The SKILL.md lives under skills/<skill_id>/ as its usage manual.
+        """
+
+        if not package.validation.passed:
+            raise ValueError(f"cannot package failed script validation: {package.script.skill_id}")
+
+        output_root = output_root.resolve()
+        scripts_dir = output_root / "scripts"
+        skill_dir = output_root / "skills" / package.script.skill_id
+        references_dir = skill_dir / "references"
+        script_path = scripts_dir / package.script.filename
+        skill_md_path = skill_dir / "SKILL.md"
+
+        if (script_path.exists() or skill_dir.exists()) and not overwrite:
+            raise FileExistsError(f"registered skill already exists: {package.script.skill_id}")
+
+        logger.info("Writing registered skill package: skill_id={} output_root={}", package.script.skill_id, output_root)
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(package.script.script_text, encoding="utf-8")
+        skill_md_path.write_text(_render_registered_skill_md(package), encoding="utf-8")
+
+        if package.references_dict:
+            references_dir.mkdir(parents=True, exist_ok=True)
+            for filename, content in package.references_dict.items():
+                (references_dir / filename).write_text(content, encoding="utf-8")
+
+        _assert_flattened(skill_dir)
+        return skill_dir
+
 
 def render_skill_md(payload: SkillPayload) -> str:
     frontmatter = yaml.safe_dump(payload.frontmatter(), sort_keys=False, allow_unicode=True).strip()
     return f"---\n{frontmatter}\n---\n\n{payload.instructions.strip()}\n"
+
+
+def _render_registered_skill_md(package: RegisteredSkillPackage) -> str:
+    frontmatter = yaml.safe_dump(
+        {
+            "name": package.script.skill_id,
+            "description": package.script.description,
+        },
+        sort_keys=False,
+        allow_unicode=True,
+    ).strip()
+    return f"---\n{frontmatter}\n---\n\n{package.skill_doc.instructions.strip()}\n"
 
 
 def _assert_flattened(skill_dir: Path) -> None:
