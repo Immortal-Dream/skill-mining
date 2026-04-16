@@ -9,22 +9,17 @@ from pathlib import Path
 from loguru import logger
 
 from easm_pipeline.core.logging import configure_logging
-from easm_pipeline.core.llm_infra.clients import (
-    RIGHT_CODE_DEFAULT_MODEL,
-    LLMClientConfig,
-    LLMProvider,
-    StructuredLLMClient,
-)
+from easm_pipeline.core.llm_infra.cli_support import add_llm_arguments, build_llm_client_from_args
+from easm_pipeline.core.llm_infra.clients import StructuredLLMClient
 from easm_pipeline.core.llm_infra.schemas import CapabilitySlice, ExtractedNode, SkillPayload
+from easm_pipeline.registered_skill_writer import RegisteredSkillWriter
 from easm_pipeline.source_to_skills.extraction.common import iter_source_files, slugify
 from easm_pipeline.source_to_skills.extraction.dependency_resolver import DependencyResolver
 from easm_pipeline.source_to_skills.extraction.java_miner import JavaMiner
 from easm_pipeline.source_to_skills.extraction.python_miner import PythonMiner
 from easm_pipeline.source_to_skills.mining.candidate_evaluator import CandidateEvaluator
 from easm_pipeline.source_to_skills.mining.candidate_schema import CandidateDecision
-from easm_pipeline.source_to_skills.packaging.filesystem_builder import FilesystemBuilder
 from easm_pipeline.source_to_skills.packaging.registered_skill import RegisteredSkillPackage
-from easm_pipeline.source_to_skills.packaging.registry_builder import RegistryBuilder
 from easm_pipeline.source_to_skills.script_mining.script_generator import ScriptGenerator
 from easm_pipeline.source_to_skills.script_mining.script_validator import ScriptValidator
 from easm_pipeline.source_to_skills.synthesis.code_bundler import CodeBundler
@@ -79,8 +74,7 @@ class EASMPipeline:
         self.script_generator = ScriptGenerator(config.llm_client)
         self.script_validator = ScriptValidator()
         self.skill_doc_generator = SkillDocGenerator(config.llm_client)
-        self.filesystem_builder = FilesystemBuilder()
-        self.registry_builder = RegistryBuilder()
+        self.skill_writer = RegisteredSkillWriter()
 
     def run(self) -> PipelineResult:
         logger.info(
@@ -92,9 +86,6 @@ class EASMPipeline:
         )
         capabilities = tuple(self.extract_capabilities())
         logger.info("Extracted {} capability slice(s)", len(capabilities))
-        if self.config.overwrite:
-            self.filesystem_builder.cleanup_legacy_registered_layout(self.config.output_dir)
-        skill_dirs: list[Path] = []
         packages: list[RegisteredSkillPackage] = []
         skipped: list[CandidateDecision] = []
         for capability in capabilities:
@@ -110,29 +101,23 @@ class EASMPipeline:
                 if decision is not None:
                     skipped.append(decision)
                 continue
-            skill_dir = self.filesystem_builder.build_registered_skill(
-                package,
-                self.config.output_dir,
-                overwrite=self.config.overwrite,
-            )
-            logger.info("Wrote skill directory: {}", skill_dir)
-            skill_dirs.append(skill_dir)
             packages.append(package)
-        if packages:
-            self.registry_builder.update(
-                self.config.output_dir,
-                tuple(packages),
-                replace=self.config.overwrite,
-            )
+        write_result = self.skill_writer.write_packages(
+            packages=tuple(packages),
+            output_dir=self.config.output_dir,
+            overwrite=self.config.overwrite,
+        )
+        for skill_dir in write_result.skill_dirs:
+            logger.info("Wrote skill directory: {}", skill_dir)
         logger.info(
             "Completed EASM Stage 1 run: generated_skills={} skipped={}",
-            len(skill_dirs),
+            len(write_result.skill_dirs),
             len(skipped),
         )
         return PipelineResult(
             capabilities=capabilities,
-            skill_dirs=tuple(skill_dirs),
-            packages=tuple(packages),
+            skill_dirs=write_result.skill_dirs,
+            packages=write_result.packages,
             skipped=tuple(skipped),
         )
 
@@ -269,21 +254,6 @@ def _dedupe_payload_name(payload: SkillPayload, used_names: set[str]) -> SkillPa
         counter += 1
 
 
-def _build_llm_client(args: argparse.Namespace) -> StructuredLLMClient | None:
-    if not args.use_llm and not args.provider and not args.model and not args.api_key and not args.base_url:
-        return None
-    provider = LLMProvider(args.provider) if args.provider else LLMProvider.RIGHT_CODE
-    config = LLMClientConfig(
-        provider=provider,
-        model=args.model or RIGHT_CODE_DEFAULT_MODEL,
-        api_key=args.api_key,
-        base_url=args.base_url,
-        max_retries=args.max_retries,
-        requests_per_minute=args.requests_per_minute,
-    )
-    return StructuredLLMClient(config)
-
-
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Stage 1 of the EASM skill mining pipeline.")
     parser.add_argument("source_dir", type=Path, help="Directory containing Python and Java legacy source files.")
@@ -299,25 +269,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fail when tree-sitter dependencies are unavailable instead of using deterministic fallbacks.",
     )
-    parser.add_argument(
-        "--provider",
-        choices=[provider.value for provider in LLMProvider],
-        help="Structured-output provider protocol. Defaults to right-code when LLM synthesis is enabled.",
-    )
-    parser.add_argument(
-        "--use-llm",
-        action="store_true",
-        help=f"Enable LLM synthesis. Defaults to right-code with RIGHT_CODE_API_KEY and model {RIGHT_CODE_DEFAULT_MODEL}.",
-    )
-    parser.add_argument("--model", help=f"LLM model name for synthesis. Defaults to {RIGHT_CODE_DEFAULT_MODEL}.")
-    parser.add_argument(
-        "--api-key",
-        help="Provider API key override. Prefer RIGHT_CODE_API_KEY for right-code.",
-    )
-    parser.add_argument("--base-url", help="Provider API base URL override.")
-    parser.add_argument("--max-retries", type=int, default=3)
-    parser.add_argument("--requests-per-minute", type=float, default=60.0)
-    return parser
+    return add_llm_arguments(parser)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -330,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
             overwrite=args.overwrite,
             prefer_tree_sitter=True,
             allow_parser_fallback=not args.strict_tree_sitter,
-            llm_client=_build_llm_client(args),
+            llm_client=build_llm_client_from_args(args),
         )
     )
     result = pipeline.run()
@@ -341,5 +293,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 
