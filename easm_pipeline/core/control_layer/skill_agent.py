@@ -19,7 +19,7 @@ from typing import Any, Sequence
 from loguru import logger
 from pydantic.v1 import BaseModel, Extra, Field, validator
 
-from easm_pipeline.constants.path_config import DEFAULT_DOMAIN, domain_output_dir
+from easm_pipeline.constants.path_config import AGENT_FILE_SYSTEM_DIR, DEFAULT_DOMAIN, domain_output_dir, ensure_agent_file_system
 from easm_pipeline.core.llm_infra.clients import (
     RIGHT_CODE_API_KEY_ENV,
     RIGHT_CODE_DEFAULT_BASE_URL,
@@ -41,6 +41,17 @@ metadata, load full skill instructions only when relevant, and prefer executing
 bundled scripts through the skill tools instead of reimplementing their logic.
 Report script stdout as the primary result, mention stderr only when execution
 fails, and ask for missing required inputs before running a script.
+
+When a task involves files, treat /workspace as the mounted agent filesystem:
+- Read user-provided files from /workspace/input.
+- Write durable task outputs to /workspace/output.
+- Use /workspace/work for scratch files.
+- Do not write results into skill source directories unless the skill explicitly requires it.
+
+When a skill script only returns stdout but the user asks for a file output,
+call run_skill_script with an extra `output_file` argument such as
+`/workspace/output/result.txt`. The sandbox executor captures stdout into that
+host-managed file without requiring every script to implement file writing.
 """
 
 
@@ -85,9 +96,9 @@ class SkillAgentConfig(BaseModel):
         default_factory=lambda: os.getenv(SANDBOX_IMAGE_ENV, DEFAULT_OPENHANDS_RUNTIME_IMAGE),
         min_length=1,
     )
-    sandbox_workspace_root: Path | None = None
+    sandbox_workspace_root: Path | None = Field(default_factory=lambda: AGENT_FILE_SYSTEM_DIR)
     sandbox_network_enabled: bool = False
-    sandbox_keep_workspace: bool = False
+    sandbox_keep_workspace: bool = True
     sandbox_memory_limit: str | None = "1g"
     sandbox_cpus: float | None = Field(1.0, gt=0)
     tool_timeout_seconds: float | None = Field(120.0, gt=0)
@@ -157,6 +168,7 @@ class SkillAgentConfig(BaseModel):
     def validate_mounts(self) -> tuple[Path, ...]:
         """Ensure every configured root exists and contains at least one skill."""
 
+        ensure_agent_file_system()
         resolved = self.resolved_skill_directories
         for directory in resolved:
             if not directory.exists():

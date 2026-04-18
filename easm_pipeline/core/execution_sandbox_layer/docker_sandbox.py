@@ -20,10 +20,13 @@ from typing import Any
 from loguru import logger
 from pydantic.v1 import BaseModel, Extra, Field, validator
 
+from easm_pipeline.constants.path_config import AGENT_FILE_SYSTEM_DIR, ensure_agent_file_system
+
 
 DEFAULT_OPENHANDS_RUNTIME_IMAGE = "ghcr.io/all-hands-ai/runtime:0.39-nikolaik"
 SANDBOX_IMAGE_ENV = "EASM_SANDBOX_IMAGE"
 DEFAULT_CONTAINER_WORKSPACE = PurePosixPath("/workspace")
+OUTPUT_FILE_ARG_KEYS = frozenset({"output_file", "output_path", "save_to"})
 
 
 class DockerSandboxError(RuntimeError):
@@ -44,8 +47,8 @@ class DockerSandboxConfig(BaseModel):
     )
     docker_cli: str = Field(default="docker", min_length=1)
     workspace_root: Path | None = Field(
-        default=None,
-        description="Host directory used as persistent sandbox workspace. A temp dir is used when omitted.",
+        default_factory=lambda: AGENT_FILE_SYSTEM_DIR,
+        description="Host directory mounted as /workspace for agent-readable input and output files.",
     )
     container_workspace: str = Field(default=str(DEFAULT_CONTAINER_WORKSPACE), min_length=1)
     timeout_seconds: int = Field(default=120, ge=1)
@@ -56,7 +59,7 @@ class DockerSandboxConfig(BaseModel):
     cap_drop_all: bool = True
     no_new_privileges: bool = True
     remove_container: bool = True
-    keep_workspace: bool = False
+    keep_workspace: bool = True
     extra_docker_args: tuple[str, ...] = Field(default_factory=tuple)
 
     class Config:
@@ -139,10 +142,11 @@ class DockerSkillScriptExecutor:
         source_skill_root = _infer_skill_root(script_path)
         sandbox_skill_root = self._prepare_skill_workspace(source_skill_root)
         relative_script = script_path.relative_to(source_skill_root)
+        script_args, output_file = _split_executor_args(args or {})
         command = self.build_docker_command(
             sandbox_skill_root=sandbox_skill_root,
             relative_script=relative_script,
-            args=args or {},
+            args=script_args,
         )
 
         logger.info(
@@ -152,6 +156,13 @@ class DockerSkillScriptExecutor:
             relative_script.as_posix(),
         )
         result = await self._run_docker_command(command)
+        if output_file and result.return_code == 0 and not result.timed_out:
+            _write_stdout_capture(
+                workspace_root=self.workspace_root,
+                container_workspace=PurePosixPath(self.config.container_workspace),
+                requested_output=output_file,
+                stdout=result.stdout,
+            )
         return result.format_for_agent()
 
     def build_docker_command(
@@ -207,9 +218,12 @@ class DockerSkillScriptExecutor:
         if self.config.workspace_root is not None:
             root = self.config.workspace_root.resolve()
             root.mkdir(parents=True, exist_ok=True)
+            _ensure_workspace_layout(root)
             return root
         self._temp_workspace = tempfile.TemporaryDirectory(prefix="easm-sandbox-")
-        return Path(self._temp_workspace.name).resolve()
+        root = Path(self._temp_workspace.name).resolve()
+        _ensure_workspace_layout(root)
+        return root
 
     def _prepare_skill_workspace(self, source_skill_root: Path) -> Path:
         skills_root = self.workspace_root / "skills"
@@ -263,6 +277,14 @@ def _infer_skill_root(script_path: Path) -> Path:
     return script_path.parent
 
 
+def _ensure_workspace_layout(root: Path) -> None:
+    if root.resolve() == AGENT_FILE_SYSTEM_DIR.resolve():
+        ensure_agent_file_system()
+        return
+    for child in ("input", "output", "work", "runs", "logs", "skills"):
+        (root / child).mkdir(parents=True, exist_ok=True)
+
+
 def _script_command(container_script: PurePosixPath, relative_script: Path) -> list[str]:
     suffix = relative_script.suffix.lower()
     script = container_script.as_posix()
@@ -304,3 +326,61 @@ def _format_sections(header: str, *, stdout: str, stderr: str) -> str:
     if stderr:
         sections.append(f"stderr:\n{stderr}")
     return "\n\n".join(sections)
+
+
+def _split_executor_args(args: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    script_args = dict(args)
+    output_file: str | None = None
+    for key in OUTPUT_FILE_ARG_KEYS:
+        value = script_args.pop(key, None)
+        if value is not None:
+            output_file = str(value)
+            break
+    return script_args, output_file
+
+
+def _write_stdout_capture(
+    *,
+    workspace_root: Path,
+    container_workspace: PurePosixPath,
+    requested_output: str,
+    stdout: str,
+) -> Path:
+    host_path = _container_or_relative_path_to_host(
+        workspace_root=workspace_root,
+        container_workspace=container_workspace,
+        requested_output=requested_output,
+    )
+    host_path.parent.mkdir(parents=True, exist_ok=True)
+    host_path.write_text(stdout, encoding="utf-8")
+    logger.info("Captured sandbox stdout to host-managed output file: {}", host_path)
+    return host_path
+
+
+def _container_or_relative_path_to_host(
+    *,
+    workspace_root: Path,
+    container_workspace: PurePosixPath,
+    requested_output: str,
+) -> Path:
+    normalized = requested_output.replace("\\", "/").strip()
+    if not normalized:
+        raise DockerSandboxError("output_file must be non-empty")
+
+    if normalized.startswith(container_workspace.as_posix().rstrip("/") + "/"):
+        relative = PurePosixPath(normalized).relative_to(container_workspace)
+    elif normalized.startswith("/"):
+        raise DockerSandboxError(f"output_file must stay under {container_workspace}: {requested_output}")
+    else:
+        relative = PurePosixPath("output") / normalized
+
+    if any(part in {"", ".", ".."} for part in relative.parts):
+        raise DockerSandboxError(f"output_file contains an unsafe path segment: {requested_output}")
+
+    host_path = (workspace_root / Path(*relative.parts)).resolve()
+    workspace_resolved = workspace_root.resolve()
+    try:
+        host_path.relative_to(workspace_resolved)
+    except ValueError as exc:
+        raise DockerSandboxError(f"output_file escapes workspace: {requested_output}") from exc
+    return host_path

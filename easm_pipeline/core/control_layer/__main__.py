@@ -10,7 +10,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from easm_pipeline.constants.path_config import DEFAULT_DOMAIN, SUPPORTED_DOMAINS, domain_output_dir
+from easm_pipeline.constants.path_config import AGENT_FILE_SYSTEM_DIR, DEFAULT_DOMAIN, SUPPORTED_DOMAINS, domain_output_dir
 from easm_pipeline.core.llm_infra.clients import RIGHT_CODE_DEFAULT_BASE_URL, RIGHT_CODE_DEFAULT_MODEL
 from easm_pipeline.core.execution_sandbox_layer import DEFAULT_OPENHANDS_RUNTIME_IMAGE, SANDBOX_IMAGE_ENV
 
@@ -52,8 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--sandbox-workspace",
-        default=None,
-        help="Host workspace mounted into Docker. Defaults to a temporary directory.",
+        default=AGENT_FILE_SYSTEM_DIR,
+        help="Host workspace mounted into Docker as /workspace.",
     )
     parser.add_argument(
         "--sandbox-network",
@@ -63,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sandbox-keep-workspace",
         action="store_true",
+        default=True,
         help="Keep the sandbox workspace after the process exits.",
     )
     parser.add_argument("--sandbox-memory", default="1g", help="Docker memory limit for script execution.")
