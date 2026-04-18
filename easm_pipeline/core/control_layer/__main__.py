@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -11,8 +12,9 @@ from loguru import logger
 
 from easm_pipeline.constants.path_config import DEFAULT_DOMAIN, SUPPORTED_DOMAINS, domain_output_dir
 from easm_pipeline.core.llm_infra.clients import RIGHT_CODE_DEFAULT_BASE_URL, RIGHT_CODE_DEFAULT_MODEL
+from easm_pipeline.core.execution_sandbox_layer import DEFAULT_OPENHANDS_RUNTIME_IMAGE, SANDBOX_IMAGE_ENV
 
-from .skill_agent import MountedSkillAgent, SkillAgentConfig, SkillAgentError
+from .skill_agent import MountedSkillAgent, SkillAgentConfig, SkillAgentError, SkillExecutionBackend
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,6 +39,41 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default=RIGHT_CODE_DEFAULT_BASE_URL, help="OpenAI-compatible API base URL.")
     parser.add_argument("--no-validate-skills", action="store_true", help="Disable pydantic-ai-skills validation.")
     parser.add_argument("--auto-reload", action="store_true", help="Reload skills when files change if supported.")
+    parser.add_argument(
+        "--execution-backend",
+        choices=[backend.value for backend in SkillExecutionBackend],
+        default=SkillExecutionBackend.LOCAL.value,
+        help="Backend used when skills call run_skill_script.",
+    )
+    parser.add_argument(
+        "--sandbox-image",
+        default=os.getenv(SANDBOX_IMAGE_ENV, DEFAULT_OPENHANDS_RUNTIME_IMAGE),
+        help="Docker image used when --execution-backend docker.",
+    )
+    parser.add_argument(
+        "--sandbox-workspace",
+        default=None,
+        help="Host workspace mounted into Docker. Defaults to a temporary directory.",
+    )
+    parser.add_argument(
+        "--sandbox-network",
+        action="store_true",
+        help="Allow network access inside Docker sandbox. Disabled by default.",
+    )
+    parser.add_argument(
+        "--sandbox-keep-workspace",
+        action="store_true",
+        help="Keep the sandbox workspace after the process exits.",
+    )
+    parser.add_argument("--sandbox-memory", default="1g", help="Docker memory limit for script execution.")
+    parser.add_argument("--sandbox-cpus", type=float, default=1.0, help="Docker CPU limit for script execution.")
+    parser.add_argument("--script-timeout", type=int, default=120, help="Timeout in seconds for each script run.")
+    parser.add_argument(
+        "--tool-timeout",
+        type=float,
+        default=None,
+        help="Pydantic AI tool timeout. Defaults to script timeout plus 10 seconds.",
+    )
     parser.add_argument("--json", action="store_true", help="Print single-instruction output as JSON.")
     return parser
 
@@ -50,6 +87,15 @@ def main(argv: list[str] | None = None) -> int:
         base_url=args.base_url,
         validate_skills=not args.no_validate_skills,
         auto_reload=args.auto_reload,
+        execution_backend=SkillExecutionBackend(args.execution_backend),
+        sandbox_image=args.sandbox_image,
+        sandbox_workspace_root=args.sandbox_workspace,
+        sandbox_network_enabled=args.sandbox_network,
+        sandbox_keep_workspace=args.sandbox_keep_workspace,
+        sandbox_memory_limit=args.sandbox_memory,
+        sandbox_cpus=args.sandbox_cpus,
+        script_timeout_seconds=args.script_timeout,
+        tool_timeout_seconds=args.tool_timeout or float(args.script_timeout + 10),
     )
     session = MountedSkillAgent(config)
 

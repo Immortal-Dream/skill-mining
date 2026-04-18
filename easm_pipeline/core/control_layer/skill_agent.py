@@ -12,6 +12,7 @@ import importlib
 import os
 import re
 import sys
+from enum import Enum
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -25,6 +26,12 @@ from easm_pipeline.core.llm_infra.clients import (
     RIGHT_CODE_DEFAULT_MODEL,
 )
 from easm_pipeline.core.logging import configure_logging
+from easm_pipeline.core.execution_sandbox_layer import (
+    DEFAULT_OPENHANDS_RUNTIME_IMAGE,
+    DockerSandboxConfig,
+    DockerSkillScriptExecutor,
+    SANDBOX_IMAGE_ENV,
+)
 
 
 DEFAULT_SKILL_AGENT_INSTRUCTIONS = """You are an EASM control-layer agent.
@@ -49,6 +56,13 @@ class SkillDirectoryError(SkillAgentError):
     """Raised when a configured skill directory is missing or malformed."""
 
 
+class SkillExecutionBackend(str, Enum):
+    """Script execution backend used by mounted skills."""
+
+    LOCAL = "local"
+    DOCKER = "docker"
+
+
 class SkillAgentConfig(BaseModel):
     """Configuration for a Pydantic AI agent with mounted Agent Skills."""
 
@@ -65,7 +79,17 @@ class SkillAgentConfig(BaseModel):
     max_depth: int = Field(3, ge=1)
     auto_reload: bool = False
     defer_model_check: bool = True
+    execution_backend: SkillExecutionBackend = SkillExecutionBackend.LOCAL
     script_timeout_seconds: int = Field(120, ge=1)
+    sandbox_image: str = Field(
+        default_factory=lambda: os.getenv(SANDBOX_IMAGE_ENV, DEFAULT_OPENHANDS_RUNTIME_IMAGE),
+        min_length=1,
+    )
+    sandbox_workspace_root: Path | None = None
+    sandbox_network_enabled: bool = False
+    sandbox_keep_workspace: bool = False
+    sandbox_memory_limit: str | None = "1g"
+    sandbox_cpus: float | None = Field(1.0, gt=0)
     tool_timeout_seconds: float | None = Field(120.0, gt=0)
 
     class Config:
@@ -100,6 +124,13 @@ class SkillAgentConfig(BaseModel):
         if not re.match(r"^https?://", stripped):
             raise ValueError("base_url must start with http:// or https://")
         return stripped
+
+    @validator("sandbox_workspace_root", pre=True)
+    @classmethod
+    def _coerce_sandbox_workspace_root(cls, value: Any) -> Path | None:
+        if value in {None, ""}:
+            return None
+        return Path(value).expanduser()
 
     @classmethod
     def from_domain(cls, domain_name: str = DEFAULT_DOMAIN, **overrides: Any) -> "SkillAgentConfig":
@@ -162,7 +193,7 @@ class SkillAgentFactory:
             api_key=config.api_key_value(),
         )
         model = openai_models.OpenAIChatModel(config.model, provider=provider)
-        script_executor = _build_current_python_executor(skills_module, config.script_timeout_seconds)
+        script_executor = _build_script_executor(config, skills_module)
         skill_directories = [
             skills_module.SkillsDirectory(
                 path=skill_root,
@@ -254,6 +285,22 @@ def _import_required(module_name: str, install_hint: str) -> Any:
         return importlib.import_module(module_name)
     except ImportError as exc:
         raise SkillAgentDependencyError(f"missing optional dependency {module_name}: {install_hint}") from exc
+
+
+def _build_script_executor(config: SkillAgentConfig, skills_module: Any) -> Any:
+    if config.execution_backend is SkillExecutionBackend.DOCKER:
+        return DockerSkillScriptExecutor(
+            DockerSandboxConfig(
+                image=config.sandbox_image,
+                workspace_root=config.sandbox_workspace_root,
+                timeout_seconds=config.script_timeout_seconds,
+                network_enabled=config.sandbox_network_enabled,
+                keep_workspace=config.sandbox_keep_workspace,
+                memory_limit=config.sandbox_memory_limit,
+                cpus=config.sandbox_cpus,
+            )
+        )
+    return _build_current_python_executor(skills_module, config.script_timeout_seconds)
 
 
 def _build_current_python_executor(skills_module: Any, timeout_seconds: int) -> Any:
