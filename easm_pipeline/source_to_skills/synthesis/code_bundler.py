@@ -22,7 +22,7 @@ class SecurityFinding(BaseModel):
     """Static-analysis finding attached to extracted code."""
 
     node_id: str
-    language: Literal["python", "java"]
+    language: str
     severity: DangerSeverity
     rule_id: str
     message: str
@@ -79,8 +79,8 @@ class CodeBundler:
                 logger.debug("Bundled Python helper script: node={} script={}", node.name, script_name)
             else:
                 reference_name = _unique_name(references, f"{slugify(node.name, max_length=48)}.md")
-                references[reference_name] = _render_java_reference(node, index=index)
-                logger.debug("Bundled Java node as reference: node={} reference={}", node.name, reference_name)
+                references[reference_name] = _render_source_reference(node, index=index)
+                logger.debug("Bundled non-Python node as reference: node={} reference={}", node.name, reference_name)
 
         logger.info(
             "Code bundling complete: slice={} scripts={} references={} findings={}",
@@ -279,11 +279,11 @@ def _render_python_reference(node: ExtractedNode, *, reason: str) -> str:
     )
 
 
-def _render_java_reference(node: ExtractedNode, *, index: int) -> str:
+def _render_source_reference(node: ExtractedNode, *, index: int) -> str:
     dependencies = "\n".join(f"- {dependency}" for dependency in node.dependencies) or "- none resolved"
     annotations = "\n".join(f"- {annotation}" for annotation in node.annotations) or "- none"
     return (
-        f"# Java Source Reference {index}: {node.name}\n\n"
+        f"# {node.language.title()} Source Reference {index}: {node.name}\n\n"
         f"- Source: `{node.file_path or '<unknown>'}:{node.start_line}-{node.end_line}`\n"
         f"- Signature: `{node.signature}`\n\n"
         "## Annotations\n"
@@ -291,7 +291,7 @@ def _render_java_reference(node: ExtractedNode, *, index: int) -> str:
         "## Localized Dependencies\n"
         f"{dependencies}\n\n"
         "## Source\n"
-        f"```java\n{node.raw_code.rstrip()}\n```\n"
+        f"```{node.language}\n{node.raw_code.rstrip()}\n```\n"
     )
 
 

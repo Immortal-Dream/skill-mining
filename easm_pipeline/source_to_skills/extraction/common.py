@@ -7,8 +7,10 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Iterable
 
+from easm_pipeline.source_to_skills.language_support import KNOWN_SOURCE_SUFFIXES
 
-SUPPORTED_SOURCE_SUFFIXES = {".py", ".java"}
+
+SUPPORTED_SOURCE_SUFFIXES = set(KNOWN_SOURCE_SUFFIXES)
 
 
 class ExtractionDependencyError(RuntimeError):
@@ -20,8 +22,23 @@ def iter_source_files(source_dir: Path, suffixes: set[str] | None = None) -> Ite
 
     allowed = suffixes or SUPPORTED_SOURCE_SUFFIXES
     for path in sorted(source_dir.rglob("*")):
-        if path.is_file() and path.suffix.lower() in allowed:
+        if not path.is_file():
+            continue
+        if path.suffix.lower() in allowed or _looks_like_shebang_script(path):
             yield path
+
+
+def _looks_like_shebang_script(path: Path, *, max_bytes: int = 256) -> bool:
+    if path.suffix:
+        return False
+    try:
+        with path.open("rb") as handle:
+            prefix = handle.read(max_bytes)
+    except OSError:
+        return False
+    if b"\x00" in prefix:
+        return False
+    return prefix.startswith(b"#!")
 
 
 def safe_relative_path(path: Path, root: Path | None = None) -> str:

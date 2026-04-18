@@ -1,65 +1,57 @@
 ---
 name: summarize-numeric-columns
-description: 'Use when a task needs to compute min, max, and mean for numeric columns
-  in row dictionaries. Triggers on: data-processing, statistics, tables, aggregation,
-  cli-candidate.'
+description: 'Use when a task needs to compute per-column min, max, and mean across
+  numeric values found in a list of row dictionaries. Triggers on: python, data-processing,
+  tables, statistics, utility.'
 ---
 
-# summarize-numeric-columns
+# Summarize numeric columns
 
-Compute per-column min, max, and mean for numeric fields found in a list of row dictionaries.
+Compute per-column min, max, and mean across numeric values found in a list of row dictionaries.
 
 ## Quick start
-
-1. From this skill folder, view CLI help first:
-
-python scripts/summarize_numeric_columns.py --help
-
-2. Run with a JSON-encoded list of row objects:
-
-python scripts/summarize_numeric_columns.py --rows-json "[{\"temperature_c\": 21.5, \"humidity\": 0.45, \"city\": \"Austin\"}, {\"temperature_c\": 24.0, \"humidity\": 0.40, \"city\": \"Austin\"}, {\"temperature_c\": 19.0, \"humidity\": 0.55, \"city\": \"Dallas\"}]" --output json
-
-Normal results are printed to stdout. Errors (for example invalid JSON) are printed to stderr.
+1. If you are unsure about flags, run --help first:
+   python scripts/summarize_numeric_columns.py --help
+2. Run the script with python using a copy-runnable example command:
+   python scripts/summarize_numeric_columns.py --input-json '[{"a":1,"b":2},{"a":3,"b":4},{"a":-1,"b":"5"}]' --allow-numeric-strings --output json --pretty
+3. Read normal results from stdout. If something goes wrong (invalid JSON, wrong input types, include/exclude overlap), check stderr for the error message and a non-zero exit code.
 
 ## Scripts
-
-- scripts/summarize_numeric_columns.py: CLI wrapper that accepts rows as JSON and prints summary statistics.
+- scripts/summarize_numeric_columns.py
 
 ## Inputs
+Provide rows as JSON representing a list of objects (list of dictionaries). Each object is a row mapping column names to values.
 
-- --rows-json (required, JSON): A JSON array of objects (row dictionaries). For each row, only numeric values (int or float) are included in the aggregation; non-numeric values are ignored.
+Accepted input methods:
+- --input-json: JSON string containing the full list of rows.
+- stdin: If --input-json is omitted or empty, the script reads JSON from stdin.
 
-- --output (optional): Output format.
-  - json (default): Pretty-printed JSON to stdout.
-  - text: Python dict string representation to stdout.
+Filtering columns:
+- --include: Comma-separated list of column names to consider. If provided, only these columns are scanned.
+- --exclude: Comma-separated list of column names to ignore.
+- --include and --exclude must not overlap.
+
+Value handling:
+- Numeric values (int, float) are included.
+- Booleans are ignored.
+- With --allow-numeric-strings, strings like "3.14" or "10" are also treated as numbers; non-numeric strings are ignored.
+- Columns with no numeric values are omitted from the output.
 
 ## Output
+Use --output to choose the output format:
+- --output json (default): Writes a JSON object to stdout mapping each column name to an object with keys min, max, mean.
+  - With --pretty, the JSON is pretty-printed.
+- --output text: Writes a human-readable text summary to stdout.
 
-On success, stdout contains a per-column summary object keyed by column name, with min, max, and mean.
-
-Example stdout (JSON):
-
-{
-  "temperature_c": {
-    "min": 19.0,
-    "max": 24.0,
-    "mean": 21.5
-  },
-  "humidity": {
-    "min": 0.4,
-    "max": 0.55,
-    "mean": 0.4666666666666666
-  }
-}
-
-On failure, stderr contains an error message prefixed with "Error:" and the process exits with code 1.
+Any errors (invalid JSON, wrong input types, include/exclude overlap) are reported to stderr with a non-zero exit code.
 
 ## When to use
-
 Use when:
-- You have row-oriented data (list of dictionaries) and want quick numeric column profiling (min, max, mean).
-- You need a deterministic, dependency-free summary you can embed in shell pipelines or automation.
+- You have row-oriented JSON data and want quick per-column numeric summaries (min, max, mean).
+- You need lightweight profiling of numeric fields before cleaning, normalization, or feature engineering.
+- You want to restrict summarization to specific columns via --include or omit columns via --exclude.
 
 Do not use when:
-- You need weighted statistics, medians/quantiles, standard deviation, or grouped aggregation.
-- Your input is not readily representable as JSON on the command line (for example very large datasets better handled via files or streaming).
+- You need statistics beyond min, max, mean (e.g., median, quantiles, variance).
+- Your data is not naturally represented as a JSON array of objects (or is too large to conveniently pass as a single JSON string without streaming/partitioning).
+- You need strict schema enforcement rather than ignoring non-numeric values.

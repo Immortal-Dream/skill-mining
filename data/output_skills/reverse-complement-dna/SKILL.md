@@ -1,42 +1,65 @@
 ---
 name: reverse-complement-dna
-description: 'Use when a task needs to return the reverse complement of a DNA sequence.
-  Triggers on: bioinformatics, dna, string-processing, sequence, cli-candidate.'
+description: 'Use when a task needs to compute the reverse complement of a DNA sequence
+  (A,C,G,T; preserves case) using a fast translation table. Triggers on: bioinformatics,
+  dna, sequence, string-processing.'
 ---
 
 # reverse-complement-dna
 
-Return the reverse complement of a DNA sequence.
+Compute the reverse complement of a DNA sequence (A,C,G,T; preserves case) using a fast translation table.
 
 ## Quick start
-1. View help (prints usage to stdout):
-python3 scripts/reverse_complement_dna.py --help
 
-2. Run with a DNA sequence (normal results go to stdout; errors go to stderr):
-python3 scripts/reverse_complement_dna.py --sequence ACGTtgca --output json
+1. Show help (recommended before first use):
+
+python scripts/reverse_complement_dna.py --help
+
+2. Run the script with a sequence:
+
+python scripts/reverse_complement_dna.py --sequence ACGTacgt
+
+Runtime hint: python
+
+Normal results are written to stdout. Errors and failures are written to stderr.
 
 ## Scripts
-- scripts/reverse_complement_dna.py: CLI for computing the reverse complement of a DNA sequence.
+
+- scripts/reverse_complement_dna.py
+  - CLI entrypoint for computing a reverse complement.
+  - Also exposes a reusable function named core_function(sequence: str) -> str inside the script.
 
 ## Inputs
-- --sequence (required, string): DNA sequence to reverse-complement. Characters outside A,C,G,T (case-insensitive) are not validated; they will be passed through unchanged except for reversal.
-- --output (optional): Output format.
-  - json (default): JSON-encoded value to stdout.
-  - text: Plain text value to stdout.
+
+Command-line flags:
+
+- --sequence SEQUENCE (required)
+  - Input DNA sequence.
+  - Standard bases are complemented with case preserved:
+    - A <-> T, C <-> G
+    - a <-> t, c <-> g
+
+- --output {json,text} (optional)
+  - Output format.
+  - Default: json
 
 ## Output
-On success, writes the reverse-complemented sequence to stdout.
 
-Example stdout (JSON output):
-{"reverse_complement":"tgcaACGT"}
+Written to stdout:
 
-On failure, writes an error message prefixed with "Error:" to stderr and exits with code 1.
+- If --output json (default): a JSON object:
+  - {"reverse_complement": "..."}
+
+- If --output text: the reverse-complement sequence followed by a newline.
+
+Errors are written to stderr and the process exits non-zero.
 
 ## When to use
+
 Use when:
-- You need the reverse complement of a DNA string for downstream analyses (primer checks, alignment preparation, k-mer workflows).
-- You want a simple, dependency-free CLI step in a pipeline.
+- You need the reverse complement of a DNA sequence containing only A,C,G,T (or lowercase equivalents).
+- You want a fast, deterministic string transformation suitable for pipelines.
 
 Do not use when:
-- You need strict validation of ambiguous bases (for example, N, R, Y) or IUPAC-aware complementation.
-- Your input is RNA (U) and you require RNA-specific handling.
+- Your input includes ambiguous or extended IUPAC bases (for example N, R, Y); these characters will not be complemented and may produce incorrect biological results.
+- You need validation, cleaning, or parsing of FASTA/FASTQ files (this script expects a sequence string provided via --sequence).
