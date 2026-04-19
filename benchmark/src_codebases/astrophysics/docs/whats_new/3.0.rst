@@ -1,0 +1,965 @@
+.. doctest-skip-all
+
+.. _whatsnew-3.0:
+
+****************************
+What's New in Photutils 3.0?
+****************************
+
+Photutils 3.0 is a major release that includes a small number of
+:ref:`breaking changes <whatsnew-3.0-breaking-changes>` alongside
+several :ref:`new deprecations <whatsnew-3.0-deprecations>`. While these
+deprecations will now trigger warning messages, they will not break
+your code. We are intentionally providing a long deprecation period to
+give users ample time to update their code before these features are
+completely removed in version 4.0. Please review the :ref:`API Changes
+<whatsnew-3.0-api-changes>` section before upgrading.
+
+Here we highlight some of the new functionality of the 3.0 release.
+In addition to these changes, Photutils 3.0 includes several
+smaller improvements and bug fixes, which are described in the full
+:ref:`changelog`.
+
+.. contents::
+   :local:
+   :depth: 2
+
+
+Dependency Version Updates
+==========================
+
+Photutils 3.0 bumps the minimum required versions of several key
+dependencies to provide users with access to the latest features and
+performance improvements:
+
+- NumPy minimum version is now 2.0
+- SciPy minimum version is now 1.13
+- Matplotlib minimum version is now 3.9
+- scikit-image minimum version is now 0.23
+
+
+Refactored ePSF Building
+=========================
+
+The ePSF building tools have been significantly refactored for improved
+robustness, better diagnostics, and a cleaner API.
+
+
+New EPSFBuildResult class
+-------------------------
+
+:class:`~photutils.psf.EPSFBuilder` now returns an
+:class:`~photutils.psf.EPSFBuildResult` dataclass instead of a plain
+tuple. The result object provides structured access to detailed build
+diagnostics::
+
+    >>> from photutils.psf import EPSFBuilder
+    >>> builder = EPSFBuilder(oversampling=4)
+    >>> result = builder(stars)
+    >>> result.epsf  # the constructed ePSF (ImagePSF)
+    >>> result.fitted_stars  # stars with updated centers/fluxes
+    >>> result.iterations  # number of iterations performed
+    >>> result.converged  # whether the build converged
+    >>> result.final_center_accuracy  # max center shift in last iteration
+
+Backward compatibility is maintained. Existing code using tuple
+unpacking will continue to work::
+
+    >>> epsf, stars = builder(stars)
+
+
+Improved star exclusion handling
+--------------------------------
+
+Stars that repeatedly fail fitting are now automatically excluded from
+subsequent iterations, with informative warnings indicating the reason
+for exclusion (e.g., fit region extends beyond the cutout, or the fit
+did not converge). The number of excluded stars and their indices are
+reported in the :class:`~photutils.psf.EPSFBuildResult`.
+
+
+Improved PSF Matching Tools
+===========================
+
+The PSF matching module has been significantly improved with better
+validation, regularization, and documentation.
+
+
+New regularization parameter
+-----------------------------
+
+The :func:`~photutils.psf_matching.make_kernel` function now includes a
+``regularization`` parameter to regularize division by near-zero values
+in the Fourier domain. This prevents numerical instabilities when the
+source PSF has very small Fourier coefficients::
+
+    >>> from photutils.psf_matching import make_kernel
+    >>> kernel = make_kernel(source_psf, target_psf, regularization=1e-4)
+
+The default value of ``1e-4`` provides good regularization for most
+cases, but can be adjusted based on the noise characteristics of your
+PSFs.
+
+
+Improved validation
+-------------------
+
+Both :func:`~photutils.psf_matching.make_kernel` and
+:func:`~photutils.psf_matching.resize_psf` now validate their inputs:
+
+* PSFs must be 2D arrays with odd dimensions
+* Window functions must return valid 2D arrays with values between [0, 1]
+* Pixel scales must be positive
+
+
+New PSF Matching Function with Wiener Regularization
+----------------------------------------------------
+
+A new :func:`~photutils.psf_matching.make_wiener_kernel`
+function has been added to the ``psf_matching`` subpackage.
+
+This function computes a Wiener-regularized PSF-matching kernel in the
+Fourier domain. The denominator includes a regularization term that
+stabilizes inversion of the source OTF (Optical Transfer Function, the
+Fourier transform of the PSF) by preventing division by small values,
+thereby suppressing noise amplification at spatial frequencies where the
+source response is weak.
+
+This method is particularly useful when working with PSFs
+that have near-zero power at high spatial frequencies (e.g.,
+diffraction-limited PSFs), where the hard amplitude thresholding
+used by :func:`~photutils.psf_matching.make_kernel` can introduce
+discontinuities in Fourier space. Wiener regularization instead smoothly
+down-weights those frequencies, producing matching kernels with less
+ringing and often eliminating the need to carefully tune a window
+function.
+
+When no ``penalty`` is provided (default), the regularization is a
+frequency-independent (zero-order scalar) Tikhonov term expressed as a
+fraction of the peak power in the source OTF::
+
+    >>> from photutils.psf_matching import make_wiener_kernel
+    >>> kernel = make_wiener_kernel(source_psf, target_psf)
+
+The function also supports a ``penalty`` parameter for
+frequency-dependent regularization. Setting ``penalty='laplacian'`` uses
+a discrete Laplacian operator that penalizes high spatial frequencies
+more heavily, reproducing the regularization approach used by the
+``pypher`` package (`Boucaud et al. 2016`_)::
+
+    >>> kernel = make_wiener_kernel(source_psf, target_psf,
+    ...                             penalty='laplacian')
+
+.. _Boucaud et al. 2016:
+    https://ui.adsabs.harvard.edu/abs/2016A%26A...596A..63B/abstract
+
+
+Improved Profile Tools
+======================
+
+New Curve of Growth Classes
+---------------------------
+
+Two new curve-of-growth classes have been added to the
+`~photutils.profiles` subpackage:
+
+* :class:`~photutils.profiles.EnsquaredCurveOfGrowth`: Computes a curve
+  of growth using concentric square apertures. The profile is measured
+  as a function of half the square's side length.
+
+* :class:`~photutils.profiles.EllipticalCurveOfGrowth`: Computes a
+  curve of growth using concentric elliptical apertures with a
+  user-defined fixed axis ratio and orientation. The profile is measured
+  as a function of the semimajor-axis length.
+
+These complement the existing :class:`~photutils.profiles.CurveOfGrowth`
+class, which uses concentric circular apertures.
+
+:class:`~photutils.profiles.EnsquaredCurveOfGrowth` example::
+
+    >>> from photutils.profiles import EnsquaredCurveOfGrowth
+    >>> half_sizes = np.arange(1, 26)  # half-sizes of the square apertures
+    >>> ecog = EnsquaredCurveOfGrowth(data, xycen, half_sizes, error=error,
+    ...                               mask=None)
+    >>> ecog.normalize()
+    >>> ee_vals = ecog.calc_ee_at_half_size(np.array([3, 6, 9]))
+
+:class:`~photutils.profiles.EllipticalCurveOfGrowth` example::
+
+    >>> from photutils.profiles import EllipticalCurveOfGrowth
+    >>> radii = np.arange(1, 26)  # semimajor-axis lengths
+    >>> ecog = EllipticalCurveOfGrowth(data, xycen, radii, axis_ratio=0.5,
+    ...                               theta=0.0, error=error, mask=None)
+    >>> ecog.normalize()
+    >>> ee_vals = ecog.calc_ee_at_radius(np.array([5, 10, 15]))
+
+
+Moffat Fitting for Radial Profiles
+----------------------------------
+
+:class:`~photutils.profiles.RadialProfile` now supports fitting a 1D
+Moffat model (using `~astropy.modeling.functional_models.Moffat1D`) to
+the radial profile, complementing the existing Gaussian fitting
+capability. Three new properties are available:
+
+* ``moffat_fit``: The fitted
+  `~astropy.modeling.functional_models.Moffat1D` model.
+* ``moffat_profile``: The fitted 1D Moffat evaluated at the profile
+  radii.
+* ``moffat_fwhm``: The FWHM from the fitted Moffat model.
+
+Moffat profiles have broader wings than Gaussians and are often a
+better representation of astronomical point-spread functions::
+
+    >>> rp = RadialProfile(data, xycen, edge_radii, error=error)
+    >>> rp.moffat_fit
+    <Moffat1D(...)>
+    >>> print(rp.moffat_fwhm)  # doctest: +SKIP
+    11.2
+
+Plot the fitted Moffat on the radial profile::
+
+    >>> fig, ax = plt.subplots()
+    >>> rp.plot(ax=ax, label='Radial Profile')
+    >>> ax.plot(rp.radius, rp.moffat_profile, label='Moffat Fit')
+    >>> ax.legend()
+
+
+Improved PSF Photometry Tools
+==============================
+
+New SourceGroups class
+----------------------
+
+A new :class:`~photutils.psf.SourceGroups` class provides a convenient
+and feature-rich interface for working with source grouping results. It
+includes:
+
+* Direct access to group IDs via the ``groups`` attribute
+* Properties for ``n_sources``, ``n_groups``, ``sizes``, and
+  ``group_centers``
+* The ``get_group_sources(group_id)`` method to retrieve sources in a
+  specific group
+* A ``plot()`` method to visualize grouping results with color-coded
+  apertures
+
+A :class:`~photutils.psf.SourceGroups` object can be returned by the
+:class:`~photutils.psf.SourceGrouper` class when called with the
+``return_source_groups=True`` keyword argument::
+
+    >>> from photutils.psf import SourceGrouper
+    >>> grouper = SourceGrouper(min_separation=10)
+    >>> groups = grouper(x, y, return_source_groups=True)
+    >>> print(groups.n_groups)  # number of groups
+
+It can also be instantiated directly from source positions and group
+IDs::
+
+    >>> from photutils.psf import SourceGroups
+    >>> groups = SourceGroups(x, y, group_ids)
+
+
+Improved Handling of Non-Finite Local Background Values in PSF Photometry
+-------------------------------------------------------------------------
+
+:class:`~photutils.psf.PSFPhotometry` and
+:class:`~photutils.psf.IterativePSFPhotometry` now gracefully handle
+non-finite (NaN or inf) local background values instead of raising an
+error. This situation can occur when the local background estimator
+encounters fully masked regions within the background annulus.
+
+When a non-finite local background value is encountered:
+
+1. The actual non-finite value is preserved and reported in the output
+   table's ``local_bkg`` column
+2. The value is not subtracted from the data before PSF fitting
+3. A new flag (bit 2048, ``NON_FINITE_LOCALBKG``) is set in the
+   ``flags`` column to indicate the issue
+
+This allows users to identify and handle problematic sources
+appropriately while still obtaining PSF fitting results where possible.
+
+
+Enhanced PSF Photometry Result Conversion Methods
+-------------------------------------------------
+
+The :meth:`~photutils.psf.PSFPhotometry.results_to_init_params` and
+:meth:`~photutils.psf.PSFPhotometry.results_to_model_params` methods
+(and their :class:`~photutils.psf.IterativePSFPhotometry` equivalents)
+now support two new optional keyword arguments:
+
+* ``remove_invalid``: When ``True``, removes sources with non-finite
+  fitted parameters (positions or flux) or invalid flags from the
+  output table. This is useful for iterative PSF photometry workflows
+  where you want to exclude failed fits from subsequent iterations.
+
+* ``reset_ids``: When ``True``, renumbers the source IDs sequentially
+  starting from 1. This is particularly useful in combination with
+  ``remove_invalid=True`` to maintain consecutive IDs after removing
+  sources.
+
+These options provide more flexibility when converting PSF photometry
+results for use in subsequent fitting iterations or other analyses.
+
+
+New PSF decode_flags convenience method
+---------------------------------------
+
+The :class:`~photutils.psf.PSFPhotometry` and
+:class:`~photutils.psf.IterativePSFPhotometry` classes now have a
+convenient ``decode_flags()`` method that decodes the bitwise flags from
+the ``'flags'`` column in the results table. The method returns a list
+of lists, where each inner list contains the active flag names for the
+corresponding source. This makes it easy to interpret which conditions
+were encountered during PSF fitting for each source.
+
+
+New ImagePSF shape property
+---------------------------
+
+:class:`~photutils.psf.ImagePSF` now has a ``shape`` property that
+returns the shape of the (oversampled) PSF data array.
+
+
+Detection Improvements
+======================
+
+Spatially varying detection thresholds
+--------------------------------------
+
+The ``threshold`` parameter in
+:class:`~photutils.detection.DAOStarFinder`,
+:class:`~photutils.detection.IRAFStarFinder`, and
+:class:`~photutils.detection.StarFinder` now accepts a 2D array in
+addition to a scalar value, allowing for spatially varying detection
+thresholds across the image. This is useful, for example, when the
+noise level varies across the field or when combining the threshold
+with a 2D background RMS map.
+
+
+Unscaled threshold option for DAOStarFinder
+-------------------------------------------
+
+:class:`~photutils.detection.DAOStarFinder` now accepts a
+``scale_threshold`` keyword (default `True`). When set to `False`, the
+input ``threshold`` is applied directly to the convolved data without
+the default DAOFIND kernel-based scaling factor.
+
+
+New ``min_separation`` parameter for ``find_peaks``
+---------------------------------------------------
+
+:func:`~photutils.detection.find_peaks` now accepts a ``min_separation``
+keyword argument that enforces a minimum peak separation without
+requiring an explicit circular footprint. When set, each detected
+peak must be the maximum value (or equal to the maximum) within a
+circle of the given radius, which is equivalent to passing a circular
+``footprint`` of that radius to :func:`~scipy.ndimage.maximum_filter`::
+
+    >>> from photutils.detection import find_peaks
+    >>> tbl = find_peaks(data, threshold=5.0, min_separation=12.5)
+
+This approach is approximately 10–400x faster than using an explicit
+circular footprint with :func:`~scipy.ndimage.maximum_filter` (depending
+on the radius). The result is identical to the slow circular-footprint
+method.
+
+This parameter is used internally by
+:class:`~photutils.detection.DAOStarFinder`,
+:class:`~photutils.detection.IRAFStarFinder`, and
+:class:`~photutils.detection.StarFinder` when ``min_separation > 0``
+is set.
+
+
+Performance improvements
+------------------------
+
+Source detection with :class:`~photutils.detection.DAOStarFinder`,
+:class:`~photutils.detection.IRAFStarFinder`, and
+:class:`~photutils.detection.StarFinder` is now significantly faster.
+Cutout extraction and image moment computation have been fully
+vectorized.
+
+
+Public StarFinderCatalogBase class
+----------------------------------
+
+A new public :class:`~photutils.detection.StarFinderCatalogBase`
+class provides a common base for the source catalogs
+produced by :class:`~photutils.detection.DAOStarFinder`,
+:class:`~photutils.detection.IRAFStarFinder`, and
+:class:`~photutils.detection.StarFinder`. Users building custom star
+finders can subclass ``StarFinderCatalogBase`` to leverage all the
+built-in catalog infrastructure (table conversion, filtering, slicing,
+etc.).
+
+
+Segmentation Improvements
+=========================
+
+Protection against large Kron radii
+------------------------------------
+
+:class:`~photutils.segmentation.SourceCatalog` now protects against
+unrealistically large ``kron_radius`` values that could cause
+out-of-memory errors. These can occur when noise or outlier pixels
+cause near-cancellation in the denominator of the Kron radius formula.
+``kron_radius`` values exceeding the measurement aperture scale factor
+(6.0) are now set to NaN, and aperture masks that would exceed the
+input data size are rejected. This prevents pathologically large Kron
+apertures from allocating excessive memory during photometry.
+
+Improved performance of source properties
+-----------------------------------------
+
+The following source properties in
+:class:`~photutils.segmentation.SourceCatalog` have been optimized for
+significantly improved performance by inlining the underlying
+computations and eliminating per-source function-call overhead:
+
+* ``centroid_quad``
+* ``centroid_win`` (~3.5x speedup)
+* ``fluxfrac_radius`` (~6x speedup)
+* ``kron_flux``
+* ``kron_fluxerr``
+* ``kron_radius`` (~2x speedup)
+* ``moments``
+* ``moments_central``
+* ``perimeter``
+
+
+New CentroidQuadratic class
+============================
+
+A new :class:`~photutils.centroids.CentroidQuadratic`
+class provides a callable object interface to the
+:func:`~photutils.centroids.centroid_quadratic` function. This
+class allows users to create a centroid function with specific
+fit parameters that can be reused multiple times. This is
+particularly useful when passing customized centroid functions to
+:func:`~photutils.centroids.centroid_sources` or other functions that
+accept a centroid function as an argument.
+
+The class is initialized with the desired ``fit_boxsize`` parameter,
+and then can be called with ``data`` and optional ``mask`` parameter::
+
+    >>> from photutils.centroids import CentroidQuadratic
+    >>> centroid_func = CentroidQuadratic(fit_boxsize=7)
+    >>> x, y = centroid_func(data, mask=mask)
+
+This is especially beneficial when using
+:func:`~photutils.centroids.centroid_sources` with fine-tuned centroid
+parameters::
+
+    >>> from photutils.centroids import centroid_sources
+    >>> centroid_func = CentroidQuadratic(fit_boxsize=11)
+    >>> x, y = centroid_sources(data, x_init, y_init, box_size=25,
+    ...                         centroid_func=centroid_func)
+
+
+Improved Aperture Pixel-to-Sky Conversions
+==========================================
+
+The :meth:`~photutils.aperture.PixelAperture.to_sky` and
+:meth:`~photutils.aperture.SkyAperture.to_pixel` methods for all
+aperture types have been significantly improved. They now use the local
+WCS Jacobian to accurately compute pixel scale factors and rotation
+angles, correctly handling WCS with distortions (e.g., SIP polynomial
+corrections) and non-square pixels.
+
+For elliptical and rectangular apertures specifically, the conversion
+now uses singular value decomposition (SVD) of the local Jacobian to
+compute independent scale factors along the width and height axes. This
+is more accurate than applying a single mean pixel scale to all linear
+dimensions, particularly near the edge of a distorted WCS or when the
+pixel scale differs significantly along the two axes.
+
+For all aperture types, the WCS properties (pixel scale, rotation angle)
+are evaluated at the first aperture position. Because aperture objects
+require scalar shape parameters, only a single reference position can
+be used. For apertures with multiple positions used with a WCS that
+has spatially-varying distortions, this may produce inaccurate shape
+conversions for positions far from the first position. This behavior
+is now clearly documented in the :ref:`photutils-aperture` user guide
+and in the ``Notes`` section of each ``to_sky`` and ``to_pixel`` method
+docstring.
+
+
+.. _whatsnew-3.0-api-changes:
+
+API Changes
+===========
+
+.. _whatsnew-3.0-deprecations:
+
+New Deprecations
+----------------
+
+Keyword-only Arguments
+^^^^^^^^^^^^^^^^^^^^^^
+
+Passing **optional** arguments positionally to all functions, classes,
+and methods in ``photutils`` is now deprecated. In the 4.0 release, all
+optional arguments must be passed as keyword arguments, e.g.::
+
+    # Old (deprecated)
+    from photutils.centroids import centroid_2dg
+    xc, yc = centroid_2dg(data, error, mask)
+
+    # New
+    from photutils.centroids import centroid_2dg
+    xc, yc = centroid_2dg(data, error=error, mask=mask)
+
+This completes the transition to keyword-only arguments for all optional
+parameters in photutils, which was initiated in version 2.0. This change
+improves code readability and reduces the likelihood of errors from
+accidentally passing arguments in the wrong order.
+
+
+Deprecated Table Column Names
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Many photutils output tables previously used concatenated column
+names (e.g., ``xcentroid``, ``ycentroid``, ``segment_fluxerr``,
+``kron_fluxerr``). In 3.0 these names are deprecated in favour of
+underscore-separated names (e.g., ``x_centroid``, ``y_centroid``,
+``segment_flux_err``, ``kron_flux_err``) that are consistent with Python
+naming conventions and the rest of the photutils API. The following
+table column names are deprecated with the corresponding new names:
+
+- ``[name]_fluxerr`` -> ``[name]_flux_err``
+- ``covar_sigx2`` -> ``covariance_xx``
+- ``covar_sigxy`` -> ``covariance_xy``
+- ``covar_sigy2`` -> ``covariance_yy``
+- ``cxx`` -> ``ellipse_cxx``
+- ``cxy`` -> ``ellipse_cxy``
+- ``cyy`` -> ``ellipse_cyy``
+- ``grad_error`` -> ``gradient_err``
+- ``grad_rerror`` -> ``gradient_rel_err``
+- ``kron_fluxerr`` -> ``kron_flux_err``
+- ``npix`` -> ``n_pixels``
+- ``npixfit`` -> ``n_pixels_fit``
+- ``pa`` -> ``orientation``
+- ``segment_fluxerr`` -> ``segment_flux_err``
+- ``semimajor_sigma`` -> ``semimajor_axis``
+- ``semiminor_sigma`` -> ``semiminor_axis``
+- ``xcenter`` -> ``x_center``
+- ``xcentroid`` -> ``x_centroid``
+- ``xcentroid_quad`` -> ``x_centroid_quad``
+- ``xcentroid_win`` -> ``x_centroid_win``
+- ``ycenter`` -> ``y_center``
+- ``ycentroid`` -> ``y_centroid``
+- ``ycentroid_quad`` -> ``y_centroid_quad``
+- ``ycentroid_win`` -> ``y_centroid_win``
+
+To ease the transition, functions and classes that return output
+tables now return a ``DeprecatedColumnQTable`` instance, which
+is a thin wrapper to `~astropy.table.QTable`. These tables
+store data under the **new** column names internally, but
+transparently intercept accesses using the old names and emit an
+`~astropy.utils.exceptions.AstropyDeprecationWarning`::
+
+    >>> from photutils.segmentation import SourceCatalog
+    >>> cat = SourceCatalog(data, segmentation_image)
+    >>> tbl = cat.to_table()
+    >>> tbl.colnames  # new names are stored
+    ['label', 'x_centroid', 'y_centroid', ...]
+    >>> tbl['xcentroid']  # deprecated name still works, with a warning
+    ...  # AstropyDeprecationWarning: 'xcentroid' is deprecated; using 'x_centroid'
+
+All other table operations (slicing, sorting, copying, etc.) continue
+to work with either the old or new name, with the same warning for
+deprecated names.
+
+
+Opting into 4.0 Behavior Early
+""""""""""""""""""""""""""""""
+
+Users who have updated their code to use the new column names
+can opt in to the 4.0 behavior immediately by setting the
+``photutils.future_column_names`` flag to `True`::
+
+    >>> import photutils
+    >>> photutils.future_column_names = True
+
+When this flag is set, all photutils functions return plain
+`~astropy.table.QTable` instances with only the new column names.
+Accessing old column names will raise a `KeyError` instead of emitting a
+warning. This lets users verify their updated code is fully compatible
+with 4.0 before the release.
+
+.. note::
+
+    The ``future_column_names`` flag is a temporary migration aid. It
+    will be **removed** in 4.0, at which point plain tables with the new
+    column names will always be returned.
+
+
+Scoped Override for Libraries
+"""""""""""""""""""""""""""""
+
+Libraries that build on photutils can use the
+``photutils.use_future_column_names`` context manager to opt into 4.0
+behavior for a limited scope without changing the global flag. This is
+thread-safe and async-safe::
+
+    >>> from photutils import use_future_column_names
+    >>> with use_future_column_names():
+    ...     table = cat.to_table()  # returns a plain QTable
+    >>> # outside the block, behavior is unchanged
+
+The context-local override takes precedence over the global
+``photutils.future_column_names`` flag and nests correctly::
+
+    >>> with use_future_column_names():
+    ...     # new names only
+    ...     with use_future_column_names(enabled=False):
+    ...         # deprecated mapping is active again
+    ...         pass
+    ...     # back to new names only
+
+
+Aperture Package
+^^^^^^^^^^^^^^^^
+
+The following `~photutils.aperture.ApertureStats` properties have
+been renamed for consistency with the rest of the photutils API:
+
+* ``covar_sigx2`` -> ``covariance_xx``
+* ``covar_sigxy`` -> ``covariance_xy``
+* ``covar_sigy2`` -> ``covariance_yy``
+* ``cxx`` -> ``ellipse_cxx``
+* ``cxy`` -> ``ellipse_cxy``
+* ``cyy`` -> ``ellipse_cyy``
+* ``data_sumcutout`` -> ``data_sum_cutout``
+* ``error_sumcutout`` -> ``error_sum_cutout``
+* ``semimajor_sigma`` -> ``semimajor_axis``
+* ``semiminor_sigma`` -> ``semiminor_axis``
+* ``xcentroid`` -> ``x_centroid``
+* ``ycentroid`` -> ``y_centroid``
+
+The old property names are deprecated and will be removed in version
+4.0.
+
+The `~photutils.aperture.ApertureStats` ``get_id`` and ``get_ids``
+methods have been renamed to ``select_id`` and ``select_ids``,
+respectively (consistent with ``select_label`` and ``select_labels``
+in `~photutils.segmentation.SourceCatalog`). The old method names are
+deprecated and will be removed in version 4.0.
+
+The ``xcenter`` and ``ycenter`` column names in the table returned
+by `~photutils.aperture.aperture_photometry` have been renamed to
+``x_center`` and ``y_center``, respectively. The old names are
+deprecated and will be removed in version 4.0.
+
+The ``CircularMaskMixin``, ``EllipticalMaskMixin``, and
+``RectangularMaskMixin`` classes are now deprecated and will be
+removed in a future version. The mask-generation logic is now handled
+internally by `~photutils.aperture.PixelAperture`. These mixin classes
+were implementation details used to share mask-generation code between
+aperture and annulus classes. No user action is required unless you were
+explicitly subclassing one of these mixin classes.
+
+
+Background Package
+^^^^^^^^^^^^^^^^^^
+
+The ``interpolator`` keyword argument for ``Background2D`` is
+now deprecated. When ``interpolator`` is eventually removed, the
+``scipy.ndimage.zoom`` cubic spline interpolator will always be used to
+resize the low-resolution arrays. The behavior will be identical to the
+current ``BkgZoomInterpolator`` default.
+
+Relatedly, the ``BkgIDWInterpolator`` and ``BkgZoomInterpolator``
+classes are now deprecated. The ``BkgIDWInterpolator`` is not
+well-suited for resizing images on a regular grid to larger sizes. It
+is also significantly slower than the default interpolator based on
+``scipy.ndimage.zoom``. The ``BkgZoomInterpolator`` functionality will
+be preserved in the default resizing behavior of ``Background2D``.
+
+The ``Background2D`` ``npixels_mesh`` and ``npixels_map`` properties
+have been renamed to ``n_pixels_mesh`` and ``n_pixels_map``,
+respectively. The old names are deprecated.
+
+The ``Background2D`` ``bkgrms_estimator`` keyword argument is now
+deprecated. Use ``bkg_rms_estimator`` instead.
+
+
+Centroids Package
+^^^^^^^^^^^^^^^^^
+
+The ``xpeak``, ``ypeak``, and ``search_boxsize`` keyword arguments
+for the :func:`~photutils.centroids.centroid_quadratic` function are
+now deprecated. Use the :func:`~photutils.centroids.centroid_sources`
+function to centroid sources at specific positions.
+
+
+Datasets Package
+^^^^^^^^^^^^^^^^
+
+The ``get_path``, ``load_spitzer_image``, ``load_spitzer_catalog``, and
+``load_star_image`` functions are now deprecated and will be removed in
+a future version.
+
+
+Detection Package
+^^^^^^^^^^^^^^^^^
+
+The ``sharplo`` and ``sharphi`` keyword arguments
+for :class:`~photutils.detection.DAOStarFinder` and
+:class:`~photutils.detection.IRAFStarFinder` are now deprecated. Use the
+``sharpness_range=(lower, upper)`` tuple keyword instead.
+
+The ``roundlo`` and ``roundhi`` keyword arguments
+for :class:`~photutils.detection.DAOStarFinder` and
+:class:`~photutils.detection.IRAFStarFinder` are now deprecated. Use the
+``roundness_range=(lower, upper)`` tuple keyword instead.
+
+The ``peakmax`` keyword argument for
+:class:`~photutils.detection.DAOStarFinder`,
+:class:`~photutils.detection.IRAFStarFinder`, and
+:class:`~photutils.detection.StarFinder` is now deprecated. Use
+``peak_max`` instead.
+
+The ``brightest`` keyword argument for
+:class:`~photutils.detection.DAOStarFinder`,
+:class:`~photutils.detection.IRAFStarFinder`, and
+:class:`~photutils.detection.StarFinder` is now deprecated. Use
+``n_brightest`` instead.
+
+The ``npeaks`` keyword argument for ``find_peaks`` is now deprecated.
+Use ``n_peaks`` instead.
+
+The ``minsep_fwhm`` keyword argument for ``IRAFStarFinder`` is now
+deprecated. Use ``min_separation`` instead.
+
+
+Isophote Package
+^^^^^^^^^^^^^^^^
+
+The ``nclip`` keyword argument for
+:meth:`~photutils.isophote.Ellipse.fit_image`,
+:meth:`~photutils.isophote.Ellipse.fit_isophote`, and
+:class:`~photutils.isophote.EllipseSample` is now deprecated. Use
+``n_clip`` instead.
+
+The following :class:`~photutils.isophote.Isophote` and
+:class:`~photutils.isophote.IsophoteList` attributes have been renamed:
+
+* ``ndata`` -> ``n_data``
+* ``nflag`` -> ``n_flag``
+* ``niter`` -> ``n_iter``
+
+The old attribute names are deprecated.
+
+
+PSF Package
+^^^^^^^^^^^
+
+The ``grid_from_epsfs`` helper function is now deprecated. This function
+creates a ``GriddedPSFModel`` from a list of ePSFs. Instead, use the
+``GriddedPSFModel`` class directly.
+
+The :class:`~photutils.psf.EPSFFitter` class is now deprecated.
+To customize the ePSF fitting process, use the ``fitter``,
+``fit_shape``, and ``fitter_maxiters`` parameters of
+:class:`~photutils.psf.EPSFBuilder` directly instead of creating an
+``EPSFFitter`` instance.
+
+The ``npixfit_partial`` flag name and ``NPIXFIT_PARTIAL`` constant on
+:class:`~photutils.psf.PSFPhotometry` flags are now deprecated. Use
+``n_pixels_fit_partial`` and ``N_PIXELS_FIT_PARTIAL`` instead.
+
+The ``localbkg_estimator`` keyword argument
+for :class:`~photutils.psf.PSFPhotometry` and
+:class:`~photutils.psf.IterativePSFPhotometry` is now deprecated. Use
+``local_bkg_estimator`` instead.
+
+The ``include_localbkg`` keyword argument for the
+``make_model_image`` and ``make_residual_image``
+methods of :class:`~photutils.psf.PSFPhotometry` and
+:class:`~photutils.psf.IterativePSFPhotometry` is now deprecated. Use
+``include_local_bkg`` instead.
+
+
+PSF Matching Package
+^^^^^^^^^^^^^^^^^^^^
+
+The ``photutils.psf.matching`` subpackage has been moved to be a
+top-level package at ``photutils.psf_matching``. This change improves
+consistency with photutils' other top-level subpackages (``aperture``,
+``background``, ``centroids``, ``detection``, etc.), as PSF matching
+is a functionally independent tool for generating convolution kernels
+rather than part of the core PSF photometry workflow.
+
+Importing from the old location (``photutils.psf.matching``) is
+deprecated and will be removed in a future version. Update your
+imports::
+
+    # Old (deprecated)
+    from photutils.psf.matching import CosineBellWindow
+
+    # New
+    from photutils.psf_matching import CosineBellWindow
+
+The PSF matching function ``create_matching_kernel`` has been renamed
+to ``make_kernel`` for brevity and consistency with Python naming
+conventions. The old function name is deprecated and will be removed in
+a future version. Update your code to use the new name::
+
+    # Old (deprecated)
+    from photutils.psf.matching import create_matching_kernel
+    from photutils.psf_matching import create_matching_kernel
+
+    # New
+    from photutils.psf_matching import make_kernel
+
+
+Segmentation Package
+^^^^^^^^^^^^^^^^^^^^
+
+The following ``SegmentationImage`` and ``SourceCatalog`` properties and
+methods have been renamed for consistency with the rest of the photutils
+API:
+
+* ``add_extra_property`` -> ``add_property``
+* ``background`` -> ``background_cutout``
+* ``background_ma`` -> ``background_cutout_masked``
+* ``convdata`` -> ``conv_data_cutout``
+* ``convdata_ma`` -> ``conv_data_cutout_masked``
+* ``cutout_maxval_index`` -> ``cutout_max_value_index``
+* ``cutout_minval_index`` -> ``cutout_min_value_index``
+* ``data`` -> ``data_cutout``
+* ``data_ma`` -> ``data_cutout_masked``
+* ``deblended_labels_inverse_map`` -> ``parent_to_deblended_labels``
+* ``deblended_labels_map`` -> ``deblended_label_to_parent``
+* ``error`` -> ``error_cutout``
+* ``error_ma`` -> ``error_cutout_masked``
+* ``extra_properties`` -> ``custom_properties``
+* ``fluxfrac_radius`` -> ``flux_radius``
+* ``get_label`` -> ``select_label``
+* ``get_labels`` -> ``select_labels``
+* ``maxval_index`` -> ``max_value_index``
+* ``maxval_xindex`` -> ``max_value_xindex``
+* ``maxval_yindex`` -> ``max_value_yindex``
+* ``minval_index`` -> ``min_value_index``
+* ``minval_xindex`` -> ``min_value_xindex``
+* ``minval_yindex`` -> ``min_value_yindex``
+* ``nlabels`` -> ``n_labels``
+* ``remove_extra_properties`` -> ``remove_properties``
+* ``remove_extra_property`` -> ``remove_property``
+* ``rename_extra_property`` -> ``rename_property``
+* ``segment`` -> ``segment_cutout``
+* ``segment_ma`` -> ``segment_cutout_masked``
+
+The old property and method names are deprecated and will be removed in
+version 4.0.
+
+The following arguments used in various segmentation functions and
+classes have been renamed for consistency:
+
+* ``apermask_method`` -> ``aperture_mask_method``
+* ``detection_cat`` -> ``detection_catalog``
+* ``localbkg_width`` -> ``local_bkg_width``
+* ``nlevels`` -> ``n_levels``
+* ``npixels`` -> ``n_pixels``
+* ``nproc`` -> ``n_processes``
+* ``nsigma`` -> ``n_sigma``
+* ``segment_img`` -> ``segmentation_image``
+
+The old argument names are deprecated and will be removed in version
+4.0.
+
+
+Utils Package
+^^^^^^^^^^^^^
+
+The ``nsigma``, ``napers``, and ``niters`` keyword arguments for
+:class:`~photutils.utils.ImageDepth` are now deprecated. Use
+``n_sigma``, ``n_apertures``, and ``n_iters`` instead.
+
+The ``napers_used`` attribute on :class:`~photutils.utils.ImageDepth` is
+now deprecated. Use ``n_apertures_used`` instead.
+
+The ``ncolors`` parameter for :func:`~photutils.utils.make_random_cmap`
+has been renamed to ``n_colors``. The old name is deprecated.
+
+The ``reg`` parameter for
+:class:`~photutils.utils.ShepardIDWInterpolator` ``__call__`` has been
+renamed to ``regularization``. The old name is deprecated.
+
+
+Removed Deprecations
+--------------------
+
+The following previously deprecated features from the
+``background`` package have been removed:
+
+* The ``Background2D`` ``edge_method`` keyword argument.
+* The ``Background2D`` ``background_mesh_masked``,
+  ``background_rms_mesh_masked``, and ``mesh_nmasked`` properties.
+* The ``BkgZoomInterpolator`` ``grid_mode`` keyword argument.
+
+For the ``psf`` package, the previously deprecated
+``FittableImageModel`` and ``EPSFModel`` classes have been removed. Use
+:class:`~photutils.psf.ImagePSF` instead.
+
+
+.. _whatsnew-3.0-breaking-changes:
+
+Breaking Changes
+----------------
+
+Consistent Default ``min_separation`` for Star Finders
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The default ``min_separation`` for
+:class:`~photutils.detection.DAOStarFinder`,
+:class:`~photutils.detection.IRAFStarFinder`, and
+:class:`~photutils.detection.StarFinder` has been unified so that all
+three star finders derive a sensible non-zero default from the PSF
+scale. The default ``min_separation`` is now `None` for all three
+classes, which triggers an automatic default based on the PSF FWHM or
+kernel size:
+
+* :class:`~photutils.detection.DAOStarFinder`: changed from ``0``
+  (no separation) to ``2.5 * fwhm``. To recover the previous behavior,
+  set ``min_separation=0``.
+* :class:`~photutils.detection.IRAFStarFinder`: changed from
+  ``max(2, int(fwhm * 2.5 + 0.5))`` to ``2.5 * fwhm``. To recover
+  the previous behavior, set
+  ``min_separation=max(2, int(fwhm * 2.5 + 0.5))``.
+* :class:`~photutils.detection.StarFinder`: changed from ``5`` to
+  ``2.5 * (min(kernel.shape) // 2)``. To recover the previous
+  behavior, set ``min_separation=5``.
+
+Passing an explicit float continues to work as before. Set
+``min_separation=0`` to disable the minimum separation requirement and
+allow sources to be detected arbitrarily close together.
+
+
+SourceCatalog ``orientation`` wrapped to [0, 360) degrees
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``orientation`` property of
+:class:`~photutils.segmentation.SourceCatalog` now always returns values
+in the range [0, 360) degrees.
+
+
+Star Finder ``pa`` Column Units and Range
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``orientation`` (was ``pa``) column in the output tables
+from :class:`~photutils.detection.IRAFStarFinder` and
+:class:`~photutils.detection.StarFinder` is now a ``Quantity`` array in
+the range of [0, 360) degrees.
+
+
+EPSFBuilder ``norm_radius`` removed
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``norm_radius`` keyword has been removed from
+:class:`~photutils.psf.EPSFBuilder`. This keyword is no
+longer relevant because the ePSF is now built directly as an
+:class:`~photutils.psf.ImagePSF`, which does not use a normalization
+radius.

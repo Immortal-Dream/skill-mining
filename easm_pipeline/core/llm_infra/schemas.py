@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from pathlib import PurePosixPath
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 from pydantic.v1 import BaseModel, Extra, Field, root_validator, validator
 
@@ -39,22 +39,22 @@ class StrictModel(BaseModel):
 
 
 class ExtractedNode(StrictModel):
-    """Deterministic AST extraction result for a Python function or Java method."""
+    """Deterministic extraction result for a source node or source file."""
 
     node_id: str = Field(
         ...,
         min_length=1,
         description="Stable deterministic identifier, usually derived from file path and byte span.",
     )
-    language: Literal["python", "java"] = Field(..., description="Source language used by the miner.")
-    node_type: Literal["function", "method", "constructor", "class"] = Field(
+    language: str = Field(..., min_length=1, description="Source language used by the miner.")
+    node_type: str = Field(
         ...,
         description="AST node category captured by deterministic parsing.",
     )
     name: str = Field(..., min_length=1, description="Function, method, constructor, or class name.")
     signature: str = Field(..., min_length=1, description="Source-level callable signature.")
     raw_code: str = Field(..., min_length=1, description="Exact source bytes decoded to text.")
-    docstring: str | None = Field(None, description="Python docstring or Java Javadoc text.")
+    docstring: str | None = Field(None, description="Best-effort leading documentation text for the node.")
     file_path: str | None = Field(None, description="Project-relative path to the source file.")
     start_byte: int = Field(..., ge=0, description="Inclusive byte offset in the source file.")
     end_byte: int = Field(..., ge=0, description="Exclusive byte offset in the source file.")
@@ -81,7 +81,7 @@ class ExtractedNode(StrictModel):
         description="Miner-owned deterministic metadata. LLM outputs do not belong here.",
     )
 
-    @validator("node_id", "name", "signature")
+    @validator("node_id", "name", "signature", "language", "node_type")
     @classmethod
     def _validate_required_text(cls, value: str) -> str:
         return _require_non_empty(value, "field")

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
 from pydantic.v1 import BaseModel, Extra, Field
 
 from easm_pipeline.core.llm_infra.schemas import CapabilitySlice
+from easm_pipeline.source_to_skills.language_support import KNOWN_SOURCE_SUFFIXES
 
 
 class DependencyContext(BaseModel):
@@ -35,9 +37,10 @@ class DependencyResolver:
         pip: list[str] = []
         internal: list[str] = []
         internal_blocks: dict[str, str] = {}
+        language = capability.nodes[0].language if capability.nodes else None
 
         for import_line in imports:
-            module_name = _root_module_name(import_line)
+            module_name = _root_module_name(import_line, language=language)
             if not module_name:
                 continue
             if _is_stdlib_module(module_name):
@@ -59,11 +62,19 @@ class DependencyResolver:
         )
 
 
-def _root_module_name(import_line: str) -> str | None:
+def _root_module_name(import_line: str, *, language: str | None = None) -> str | None:
+    if language == "python":
+        return _python_root_module_name(import_line)
+    if language == "java":
+        return import_line.split(".", 1)[0].strip() or None
+    return _generic_root_module_name(import_line)
+
+
+def _python_root_module_name(import_line: str) -> str | None:
     try:
         parsed = ast.parse(import_line)
     except SyntaxError:
-        return None
+        return _generic_root_module_name(import_line)
     if not parsed.body:
         return None
     statement = parsed.body[0]
@@ -72,6 +83,17 @@ def _root_module_name(import_line: str) -> str | None:
     if isinstance(statement, ast.ImportFrom) and statement.module:
         return statement.module.split(".", 1)[0]
     return None
+
+
+def _generic_root_module_name(import_line: str) -> str | None:
+    quoted = re.search(r"""["'](?P<module>[@A-Za-z0-9_./-]+)["']""", import_line)
+    if quoted:
+        return quoted.group("module").lstrip("@").split("/", 1)[0].split(".", 1)[0]
+    match = re.search(r"\b(?:import|from|using|use|require|include|package|namespace)\s+([A-Za-z0-9_.-]+)", import_line)
+    if match:
+        return match.group(1).split(".", 1)[0].split("/", 1)[0]
+    simple = re.search(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", import_line)
+    return simple.group(1) if simple else None
 
 
 def _is_stdlib_module(module_name: str) -> bool:
@@ -89,12 +111,17 @@ def _is_stdlib_module(module_name: str) -> bool:
 
 def _looks_internal(module_name: str, source_root: Path) -> bool:
     dotted_path = Path(*module_name.split("."))
-    return (source_root / f"{dotted_path}.py").exists() or (source_root / dotted_path / "__init__.py").exists()
+    candidates = [source_root / dotted_path / "__init__.py"]
+    candidates.extend(source_root / f"{dotted_path}{suffix}" for suffix in KNOWN_SOURCE_SUFFIXES)
+    candidates.extend(source_root / dotted_path / f"index{suffix}" for suffix in KNOWN_SOURCE_SUFFIXES)
+    return any(path.exists() for path in candidates)
 
 
 def _read_internal_source(module_name: str, source_root: Path, *, max_chars: int = 4000) -> dict[str, str]:
     dotted_path = Path(*module_name.split("."))
-    candidates = (source_root / f"{dotted_path}.py", source_root / dotted_path / "__init__.py")
+    candidates = [source_root / dotted_path / "__init__.py"]
+    candidates.extend(source_root / f"{dotted_path}{suffix}" for suffix in KNOWN_SOURCE_SUFFIXES)
+    candidates.extend(source_root / dotted_path / f"index{suffix}" for suffix in KNOWN_SOURCE_SUFFIXES)
     blocks: dict[str, str] = {}
     for path in candidates:
         if path.exists() and path.is_file():
@@ -113,6 +140,11 @@ def _detect_business_coupling(raw_code: str, imports: tuple[str, ...]) -> list[s
         "fastapi": "depends on FastAPI request/application context",
         "sqlalchemy": "depends on SQLAlchemy/database context",
         "boto3": "depends on cloud provider credentials or clients",
+        "spring": "depends on Spring application context",
+        "jakarta": "depends on Jakarta EE container context",
+        "express": "depends on Express request/application context",
+        "nestjs": "depends on NestJS application context",
+        "react": "depends on React component/runtime context",
     }
     for term, reason in framework_terms.items():
         if term in lowered_imports or term in lowered_code:

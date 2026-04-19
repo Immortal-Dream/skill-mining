@@ -1,0 +1,94 @@
+.. doctest-skip-all
+
+****************************
+What's New in Photutils 1.6?
+****************************
+
+Here we highlight some of the new functionality of the 1.6 release. In
+addition to these major changes, Photutils 1.6 includes a large number
+of smaller improvements and bug fixes, which are described in the full
+:ref:`changelog`.
+
+.. contents::
+   :local:
+   :depth: 2
+
+
+New centroids available in SourceCatalog
+========================================
+
+New centroids were added to the
+:class:`~photutils.segmentation.SourceCatalog` class, including
+iteratively-calculated "windowed" centroids and centroids calculated by
+fitting a 2D quadratic polynomial to the unmasked pixels in the source
+segment.
+
+The "windowed" centroids are equivalent the SourceExtractors
+``XWIN_IMAGE`` and ``YWIN_IMAGE`` parameters. The new "windowed"
+centroid properties are:
+
+* ``photutils.segmentation.SourceCatalog.centroid_win``
+* ``photutils.segmentation.SourceCatalog.cutout_centroid_win``
+* ``photutils.segmentation.SourceCatalog.xcentroid_win``
+* ``photutils.segmentation.SourceCatalog.ycentroid_win``
+* ``photutils.segmentation.SourceCatalog.sky_centroid_win``
+
+The "quadratic" centroids are calculated using
+`~photutils.centroids.centroid_quadratic`. The new quadratic centroid
+properties are:
+
+* ``photutils.segmentation.SourceCatalog.centroid_quad``
+* ``photutils.segmentation.SourceCatalog.cutout_centroid_quad``
+* ``photutils.segmentation.SourceCatalog.xcentroid_quad``
+* ``photutils.segmentation.SourceCatalog.ycentroid_quad``
+* ``photutils.segmentation.SourceCatalog.sky_centroid_quad``
+
+
+Slicing a SegmentationImage
+===========================
+
+:class:`~photutils.segmentation.SegmentationImage`
+objects can now be sliced in x and y, generating a new
+:class:`~photutils.segmentation.SegmentationImage` object.
+
+
+New ImageDepth class
+====================
+
+A new :class:`~photutils.utils.ImageDepth` class was added to compute
+the limiting fluxes and magnitudes of an image.
+
+
+ApertureStats
+=============
+
+The :class:`~photutils.aperture.ApertureStats` class now accepts
+`~astropy.nddata.NDData` objects as input.
+
+
+Progress Bars in SourceCatalog and PSF fitting
+==============================================
+
+An ``progress_bar`` keyword option was added to
+`~photutils.segmentation.SourceCatalog` to enable progress bars when
+calculating some properties (e.g., ``kron_radius``, ``kron_flux``,
+``fluxfrac_radius``, ``circular_photometry``, ``centroid_win``,
+``centroid_quad``).
+
+An option to enable progress bars during PSF fitting was added. To
+enable it, set ``progress_bar=True`` when calling the PSF-fitting object
+on your data. The progress bar tracks progress over the star groups.
+
+The progress bars require installation of the `tqdm
+<https://tqdm.github.io/>`_ optional dependency.
+
+
+New subshape keyword in PSF fitting
+===================================
+
+A new ``subshape`` keyword was added to the PSF-fitting classes to
+define the shape over which the PSF is subtracted when computing the
+residual image. Previously, the PSF-subtraction region was always
+defined by the ``fitshape`` keyword. By default (and for backwards
+compatibility), ``subshape`` is set to `None`, which means the
+``fitshape`` value will be used.

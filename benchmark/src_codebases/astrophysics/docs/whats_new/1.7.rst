@@ -1,0 +1,60 @@
+.. doctest-skip-all
+
+****************************
+What's New in Photutils 1.7?
+****************************
+
+Here we highlight some of the new functionality of the 1.7 release. In
+addition to these major changes, Photutils 1.7 includes a large number
+of smaller improvements and bug fixes, which are described in the full
+:ref:`changelog`.
+
+.. contents::
+   :local:
+   :depth: 2
+
+
+New Profiles Subpackage
+=======================
+
+A new `photutils.profiles` subpackage was added containing tools for
+computing radial profiles and curves of growth:
+
+*  `~photutils.profiles.RadialProfile`
+*  `~photutils.profiles.CurveOfGrowth`
+
+
+Converting ``SegmentationImage`` segments to polygons
+=====================================================
+
+The ``SegmentationImage`` class now has a ``polygons`` attribute, which
+returns a list of `Shapely`_ polygons representing each source segment.
+It also now has a ``to_patches`` and a ``plot_patches`` method, which
+returns or plots, respectively, a list of `matplotlib.patches.Polygon`
+objects. These features require that both the `Rasterio`_ and `Shapely`_
+optional dependencies are installed.
+
+
+``ApertureStats`` local background
+==================================
+
+The `~photutils.aperture.ApertureStats` ``local_bkg`` keyword can now
+be input as a scalar value, which will be broadcast for apertures
+with multiple positions. This can be useful to avoid loading large
+memory-mapped images into memory if the background level is constant.
+
+
+Performance Improvements
+========================
+
+A number of significant performance improvements have been made:
+
+* :func:`~photutils.aperture.aperture_photometry` and
+  :meth:`~photutils.aperture.PixelAperture.do_photometry`
+* :meth:`~photutils.aperture.PixelAperture.area_overlap`
+* :class:`~photutils.psf.GriddedPSFModel`
+* :meth:`~photutils.segmentation.SegmentationImage.make_source_mask`
+
+
+.. _Rasterio: https://rasterio.readthedocs.io/en/stable/
+.. _Shapely: https://shapely.readthedocs.io/en/stable/

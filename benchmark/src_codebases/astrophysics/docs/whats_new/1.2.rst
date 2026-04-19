@@ -1,0 +1,7 @@
+.. doctest-skip-all
+
+****************************
+What's New in Photutils 1.2?
+****************************
+
+Please see the :ref:`changelog` for the complete list of changes.

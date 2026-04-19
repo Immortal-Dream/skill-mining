@@ -8,6 +8,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from easm_pipeline.constants.path_config import DEFAULT_DOMAIN, SUPPORTED_DOMAINS, domain_output_dir, domain_source_dir
 from easm_pipeline.core.logging import configure_logging
 from easm_pipeline.core.llm_infra.cli_support import add_llm_arguments, build_llm_client_from_args
 from easm_pipeline.core.llm_infra.clients import StructuredLLMClient
@@ -15,11 +16,15 @@ from easm_pipeline.core.llm_infra.schemas import CapabilitySlice, ExtractedNode,
 from easm_pipeline.registered_skill_writer import RegisteredSkillWriter
 from easm_pipeline.source_to_skills.extraction.common import iter_source_files, slugify
 from easm_pipeline.source_to_skills.extraction.dependency_resolver import DependencyResolver
+from easm_pipeline.source_to_skills.extraction.generic_miner import GenericTextMiner
 from easm_pipeline.source_to_skills.extraction.java_miner import JavaMiner
 from easm_pipeline.source_to_skills.extraction.python_miner import PythonMiner
+from easm_pipeline.source_to_skills.extraction.registry import SourceMinerRegistry
 from easm_pipeline.source_to_skills.mining.candidate_evaluator import CandidateEvaluator
 from easm_pipeline.source_to_skills.mining.candidate_schema import CandidateDecision
 from easm_pipeline.source_to_skills.packaging.registered_skill import RegisteredSkillPackage
+from easm_pipeline.source_to_skills.packaging.registry_builder import RegistryBuilder
+from easm_pipeline.source_to_skills.script_mining.native_script_generator import NativeSourceScriptGenerator
 from easm_pipeline.source_to_skills.script_mining.script_generator import ScriptGenerator
 from easm_pipeline.source_to_skills.script_mining.script_validator import ScriptValidator
 from easm_pipeline.source_to_skills.synthesis.code_bundler import CodeBundler
@@ -65,6 +70,12 @@ class EASMPipeline:
             prefer_tree_sitter=config.prefer_tree_sitter,
             allow_regex_fallback=config.allow_parser_fallback,
         )
+        self.generic_miner = GenericTextMiner()
+        self.miner_registry = SourceMinerRegistry(
+            python_miner=self.python_miner,
+            java_miner=self.java_miner,
+            generic_miner=self.generic_miner,
+        )
         self.metadata_generator = MetadataGenerator(config.llm_client)
         self.instruction_writer = InstructionWriter(config.llm_client)
         self.skill_reviewer = SkillInstructionReviewer(config.llm_client)
@@ -72,6 +83,7 @@ class EASMPipeline:
         self.dependency_resolver = DependencyResolver()
         self.candidate_evaluator = CandidateEvaluator(config.llm_client)
         self.script_generator = ScriptGenerator(config.llm_client)
+        self.native_script_generator = NativeSourceScriptGenerator(config.llm_client)
         self.script_validator = ScriptValidator()
         self.skill_doc_generator = SkillDocGenerator(config.llm_client)
         self.skill_writer = RegisteredSkillWriter()
@@ -129,12 +141,7 @@ class EASMPipeline:
         capabilities: list[CapabilitySlice] = []
         for source_file in iter_source_files(source_dir):
             logger.debug("Mining source file: {}", source_file)
-            if source_file.suffix.lower() == ".py":
-                nodes = self.python_miner.mine_file(source_file, project_root=source_dir)
-            elif source_file.suffix.lower() == ".java":
-                nodes = self.java_miner.mine_file(source_file, project_root=source_dir)
-            else:
-                continue
+            nodes = self.miner_registry.mine_file(source_file, project_root=source_dir)
             if not nodes:
                 logger.debug("No extractable nodes found: {}", source_file)
                 continue
@@ -154,14 +161,30 @@ class EASMPipeline:
             logger.info("Skipped capability: slice={} reason={}", capability.slice_id, decision.reason)
             return None
 
-        script = self.script_generator.generate(capability, dependencies, decision)
+        node = capability.nodes[0]
+        if node.language == "python":
+            script = self.script_generator.generate(capability, dependencies, decision)
+        else:
+            script = self.native_script_generator.generate(
+                capability,
+                dependencies,
+                decision,
+                source_root=self.config.source_dir,
+            )
         validation = self.script_validator.validate(script)
         if not validation.passed and self.config.llm_client is not None:
             logger.warning(
                 "LLM-generated script failed validation; falling back to deterministic script: skill_id={}",
                 decision.skill_id,
             )
-            script = self.script_generator.generate_fallback(capability, dependencies, decision)
+            if node.language == "python":
+                script = self.script_generator.generate_fallback(capability, dependencies, decision)
+            else:
+                script = self.native_script_generator.generate_fallback(
+                    capability,
+                    decision,
+                    source_root=self.config.source_dir,
+                )
             validation = self.script_validator.validate(script)
         if not validation.passed:
             self._last_skip_decision = decision.copy(
@@ -236,7 +259,7 @@ def _capability_from_nodes(source_file: Path, source_root: Path, nodes: list[Ext
         slice_id=slugify(f"{relative}-{node_label}", max_length=64),
         title=title,
         nodes=tuple(nodes),
-        summary=f"Extracted {len(nodes)} callable node(s) from {relative}.",
+        summary=f"Extracted {len(nodes)} source node(s) from {relative}.",
         source_files=(relative,),
     )
 
@@ -256,12 +279,26 @@ def _dedupe_payload_name(payload: SkillPayload, used_names: set[str]) -> SkillPa
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Stage 1 of the EASM skill mining pipeline.")
-    parser.add_argument("source_dir", type=Path, help="Directory containing Python and Java legacy source files.")
+    parser.add_argument(
+        "source_dir",
+        type=Path,
+        nargs="?",
+        help="Directory containing source files to mine into skills. Omit when using --domain.",
+    )
+    parser.add_argument(
+        "--domain",
+        default=None,
+        help=(
+            "Mine a configured domain from data/sample_source/<domain> into "
+            "data/output_skills/<domain>. "
+            f"Known starter domains: {', '.join(SUPPORTED_DOMAINS)}."
+        ),
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("output_skills"),
-        help="Directory where generated skill folders will be written.",
+        default=None,
+        help="Directory where generated skill folders will be written. Overrides the configured domain output path.",
     )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing generated skill directories.")
     parser.add_argument(
@@ -275,10 +312,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+    source_dir, output_dir = _resolve_cli_paths(args)
     pipeline = EASMPipeline(
         PipelineConfig(
-            source_dir=args.source_dir,
-            output_dir=args.output_dir,
+            source_dir=source_dir,
+            output_dir=output_dir,
             overwrite=args.overwrite,
             prefer_tree_sitter=True,
             allow_parser_fallback=not args.strict_tree_sitter,
@@ -289,6 +327,20 @@ def main(argv: list[str] | None = None) -> int:
     for skill_dir in result.skill_dirs:
         print(skill_dir)
     return 0
+
+
+def _resolve_cli_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    domain = args.domain
+    if domain:
+        source_dir = args.source_dir or domain_source_dir(domain)
+        output_dir = args.output_dir or domain_output_dir(domain)
+        return source_dir, output_dir
+
+    if args.source_dir is None:
+        domain = DEFAULT_DOMAIN
+        return domain_source_dir(domain), args.output_dir or domain_output_dir(domain)
+
+    return args.source_dir, args.output_dir or Path("output_skills")
 
 
 if __name__ == "__main__":

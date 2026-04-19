@@ -1,0 +1,54 @@
+# Licensed under a 3-clause BSD style license - see LICENSE.rst
+"""
+Tools for generating footprints.
+"""
+
+import numpy as np
+
+from photutils.utils._deprecation import deprecated_positional_kwargs
+
+__all__ = ['circular_footprint']
+
+
+@deprecated_positional_kwargs(since='3.0', until='4.0')
+def circular_footprint(radius, dtype=int):
+    """
+    Create a circular footprint.
+
+    A pixel is considered to be entirely in or out of the footprint
+    depending on whether its center is in or out of the footprint.
+    The size of the output array is the minimal bounding box for the
+    footprint.
+
+    Parameters
+    ----------
+    radius : int or float
+        The radius of the circular footprint. If float, must be a
+        positive finite whole number (e.g., 2.0 is accepted).
+
+    dtype : data-type, optional
+        The data type of the output `~numpy.ndarray`.
+
+    Returns
+    -------
+    footprint : `~numpy.ndarray`
+        A footprint where array elements are 1 within the footprint and
+        0 otherwise.
+
+    Examples
+    --------
+    >>> from photutils.utils import circular_footprint
+    >>> circular_footprint(2)
+    array([[0, 0, 1, 0, 0],
+           [0, 1, 1, 1, 0],
+           [1, 1, 1, 1, 1],
+           [0, 1, 1, 1, 0],
+           [0, 0, 1, 0, 0]])
+    """
+    if not np.isfinite(radius) or radius <= 0 or int(radius) != radius:
+        msg = 'radius must be a positive, finite integer greater than 0'
+        raise ValueError(msg)
+
+    x = np.arange(-radius, radius + 1)
+    xx, yy = np.meshgrid(x, x)
+    return np.array((xx**2 + yy**2) <= radius**2, dtype=dtype)

@@ -1,0 +1,305 @@
+.. doctest-skip-all
+
+.. _whatsnew-2.0:
+
+****************************
+What's New in Photutils 2.0?
+****************************
+
+Photutils 2.0 is a major release that adds significant new functionality
+and improvements to the package. Here we highlight some of the new
+functionality of the 2.0 release. In addition to these changes,
+Photutils 2.0 includes a large number of smaller improvements and bug
+fixes, which are described in the full :ref:`changelog`.
+
+.. contents::
+   :local:
+   :depth: 2
+
+
+Imports
+=======
+
+Importing tools from all subpackages now requires including the
+subpackage name. These deprecations were introduced in version 1.6.0
+(2022-12-09). Also, PSF matching tools must now be imported from
+``photutils.psf.matching`` instead of ``photutils.psf``
+
+For example, this is no longer allowed: ``from photutils import
+CircularAperture``. Instead use this: ``from photutils.aperture import
+CircularAperture``.
+
+
+SciPy is now a required dependency
+==================================
+
+`SciPy <https://scipy.org/>`_ is now a required dependency for
+Photutils, instead of an optional dependency. This change was made
+because most of the subpackages in Photutils require SciPy for
+functionality.
+
+
+Aperture photometry tools now accept Region objects
+===================================================
+
+The `~photutils.aperture.aperture_photometry` and
+`~photutils.aperture.ApertureStats` tools now accept supported
+``regions.Region`` objects from the `Astropy regions package
+<https://astropy-regions.readthedocs.io/en/latest/>`_, i.e., those
+corresponding to circular, elliptical, and rectangular apertures.
+
+A new `~photutils.aperture.region_to_aperture` convenience function
+also has been added to convert supported ``regions.Region`` objects to
+``Aperture`` objects.
+
+With these changes, the `Astropy regions package
+<https://astropy-regions.readthedocs.io/en/latest/>`_ is now an optional
+dependency for Photutils. It will need to be installed to use the above
+functionality.
+
+
+Background2D improved performance and changes
+=============================================
+
+The `~photutils.background.Background2D` class has been refactored
+to significantly reduce its memory usage. In some cases, it is also
+significantly faster.
+
+To reduce memory usage, ``Background2D`` no longer keeps a cached copy
+of the returned ``background`` and ``background_rms`` properties. Assign
+these properties to variables if you need to use them multiple times,
+otherwise they will need to be recomputed.
+
+The ``background``, ``background_rms``, ``background_mesh``, and
+``background_rms_mesh`` properties now have the same ``dtype`` as the
+input data.
+
+Two new properties were also added to the ``Background2D`` class,
+``npixels_mesh`` and ``npixels_map``, that give a 2D array of the number
+of pixels used to compute the statistics in the low-resolution grid and
+the resized image, respectively.
+
+Additionally, the ``background_mesh`` and ``background_rms_mesh``
+properties will have units if the input data has units.
+
+As part of these changes, the ``edge_method`` keyword is now
+deprecated and will be removed in a future version. When removed, the
+``edge_method`` will always be ``'pad'``. The ``'crop'`` option has been
+strongly discouraged for some time now. Its usage creates a undesirable
+scaling of the low-resolution maps that leads to incorrect results.
+
+The ``background_mesh_masked``, ``background_rms_mesh_masked``, and
+``mesh_nmasked`` properties are now deprecated and will be removed in
+a future version. The ``data``, ``mask``, ``total_mask``, ``nboxes``,
+``box_npixels``, and ``nboxes_tot`` class attributes have been removed.
+
+Finally, the `~photutils.background.BkgZoomInterpolator` ``grid_mode``
+keyword is now deprecated. When ``grid_mode`` is eventually removed, the
+`True` option will always be used. For zooming 2D images, this keyword
+should be set to `True`, which makes zoom's behavior consistent with
+`scipy.ndimage.map_coordinates` and `skimage.transform.resize`. The
+`False` option was provided only for backwards-compatibility.
+
+
+GriddedPSFModel improved performance
+====================================
+
+The `~photutils.psf.GriddedPSFModel` class has been refactored to
+significantly improve its performance. In typical PSF photometry use
+cases, it is now about 4 times faster than previous versions.
+
+
+New PSF Model classes
+======================
+
+New models were added to the ``photutils.psf`` module. These include:
+
+- `~photutils.psf.ImagePSF`: a general class for image-based PSF models
+  that allows for intensity scaling and translations.
+
+- `~photutils.psf.GaussianPSF`: a general 2D Gaussian PSF model
+  parameterized in terms of the position, total flux, and full width
+  at half maximum (FWHM) along the x and y axes. Rotation can also be
+  included.
+
+- `~photutils.psf.CircularGaussianPSF`: a circular 2D Gaussian PSF model
+  parameterized in terms of the position, total flux, and FWHM.
+
+- `~photutils.psf.GaussianPRF`: a general 2D Gaussian PSF model
+  parameterized in terms of the position, total flux, and FWHM
+  along the x and y axes. Rotation can also be included.
+
+- `~photutils.psf.CircularGaussianPRF`: a circular 2D Gaussian PRF model
+  parameterized in terms of the position, total flux, and FWHM.
+
+- `~photutils.psf.CircularGaussianSigmaPRF`: a circular 2D Gaussian PRF
+  model parameterized in terms of the position, total flux, and sigma
+  (standard deviation).
+
+- `~photutils.psf.MoffatPSF`: a 2D Moffat PSF model parameterized in
+  terms of the position, total flux, :math:`\alpha`, and :math:`\beta`
+  parameters.
+
+- `~photutils.psf.AiryDiskPSF`: a 2D Airy disk PSF model parameterized
+  in terms of the position, total flux, and radius of the first dark
+  ring.
+
+Note there are two types of defined models, PSF and PRF models. The PSF
+models are evaluated by sampling the analytic function at the input (x,
+y) coordinates. The PRF models are evaluated by integrating the analytic
+function over the pixel areas.
+
+The existing ``IntegratedGaussianPRF`` model is now deprecated and
+will be removed in a future version. It has been replaced by the
+`~photutils.psf.CircularGaussianSigmaPRF` model.
+
+The existing ``FittableImageModel`` and ``EPSFModel`` classes are now
+deprecated and will be removed in a future version. They have been
+replaced by the new `~photutils.psf.ImagePSF` class.
+
+
+Legacy ``LevMarLSQFitter`` no longer used
+=========================================
+
+The default Astropy fitter for ``PSFPhotometry``,
+``IterativePSFPhotometry``, and ``EPSFFitter`` was changed from
+``LevMarLSQFitter`` to ``TRFLSQFitter``.
+
+``LevMarLSQFitter`` uses the Levenberg-Marquardt algorithm via
+the SciPy legacy function ``scipy.optimize.leastsq``, which is no
+longer recommended. This fitter supports parameter bounds using an
+unsophisticated min/max condition where parameters that are out of
+bounds are simply reset to the min or max of the bounds during each
+step. This can cause parameters to stick to one of the bounds during the
+fitting process if the parameter gets close to the bound. If needed,
+this fitter can still be used by explicitly setting the fitter in the
+``PSFPhotometry``, ``IterativePSFPhotometry``, and ``EPSFFitter``
+classes.
+
+The fitter used in ``RadialProfile`` to fit the profile with a Gaussian
+was also changed from ``LevMarLSQFitter`` to ``TRFLSQFitter``.
+
+The fitter used in ``centroid_1dg`` and ``centroid_2dg`` was also
+changed from ``LevMarLSQFitter`` to ``TRFLSQFitter``.
+
+For more information about Astropy's non-linear fitters, see
+:ref:`astropy:modeling-getting-started-nonlinear-notes`.
+
+
+Breaking API Change for PSF Photometry residual/model images
+============================================================
+
+The ``sub_shape`` keyword in `~photutils.psf.IterativePSFPhotometry`
+now defaults to using the model bounding box to define the shape. This
+is a change from the previous behavior where the default shape was set
+to ``fit_shape``. In general, one should want the subtraction shape to
+cover a large portion of the model image, which the bounding box does.
+If one wants to use a different shape, then the ``sub_shape`` keyword
+can be explicitly set. If the PSF model does not have a bounding box
+attribute, then the ``sub_shape`` keyword must be set to define the
+subtraction shape.
+
+Similarly, ``psf_shape`` is now an optional keyword in
+the ``make_model_image`` and ``make_residual_image``
+methods of `~photutils.psf.PSFPhotometry` and
+`~photutils.psf.IterativePSFPhotometry`. The value defaults to using the
+model bounding box to define the shape and is required only if the PSF
+model does not have a bounding box attribute. In general, one should
+want the model and residual images to be constructed using a large
+portion of model image, which the bounding box does. If one wants to use
+a different shape, then the ``psf_shape`` keyword can be explicitly set.
+
+
+Bounding model fits in PSF Photometry
+=====================================
+
+A new ``xy_bounds`` keyword was added to `~photutils.psf.PSFPhotometry`
+and `~photutils.psf.IterativePSFPhotometry` to allow one to bound
+the x and y model parameters during the fitting. This can be used to
+prevent the fit values from wandering too far from the initial parameter
+guesses.
+
+
+New FWHM estimation tool
+========================
+
+A new `~photutils.psf.fit_fwhm` convenience function was added to
+estimate the FWHM of one or more sources in an image by fitting a
+circular 2D Gaussian PRF model using the PSF photometry tools.
+
+Similarly, a new `~photutils.psf.fit_2dgaussian` convenience function
+was added to fit a circular 2D Gaussian PRF to one or more sources in an
+image.
+
+
+Segmentation Image data type
+============================
+
+The `~photutils.segmentation.detect_sources` and
+`~photutils.segmentation.deblend_sources` functions and
+`~photutils.segmentation.SourceFinder` class now return a
+``SegmentationImage`` instance whose data dtype is ``np.int32`` instead
+of ``int`` (``int64``) unless more than (2**32 - 1) labels are needed.
+
+Also, the ``relabel_consecutive``, ``resassign_label(s)``,
+``keep_label(s)``, ``remove_label(s)``, ``remove_border_labels``, and
+``remove_masked_labels`` methods now keep the original dtype of the
+segmentation image instead of always changing it to ``int`` (``int64``).
+
+
+Improved performance for source deblending
+==========================================
+
+Performance improvements and significant reductions in memory usage
+were made for source deblending, especially for large sources
+and/or large ``nlevels`` values. The memory usage is now mostly
+independent of the number of ``nlevels``, and the memory usage
+will be significantly reduced for large sources. This affects
+the `~photutils.segmentation.deblend_sources` function and the
+`~photutils.segmentation.SourceFinder` class.
+
+Additionally, the accuracy of the deblending progress bar is now
+improved when using multiprocessing. The progress bar now also displays
+the ID label number of either the current source being deblended
+(serial) or the last source that was deblended (multiprocessing).
+
+
+DAOStarFinder flux and mag changes
+==================================
+
+The `~photutils.detection.DAOStarFinder` ``flux`` and ``mag`` columns
+were changed to give sensible values. Previously, the ``flux`` value was
+defined by the original DAOFIND algorithm as a measure of the intensity
+ratio of the amplitude of the best fitting Gaussian function at the
+object position to the detection threshold. Over the years, this has
+led to a lot of (understandable) confusion. The new ``flux`` column now
+gives the sum of data values within the kernel footprint.
+
+A ``daofind_mag`` column was added for comparison to the original IRAF
+DAOFIND algorithm.
+
+
+DAOStarFinder and IRAFStarFinder sky keyword removed
+====================================================
+
+The deprecated ``sky`` keyword in `~photutils.detection.DAOStarFinder`
+and `~photutils.detection.IRAFStarFinder` has been removed.
+Also, there will no longer be a ``sky`` column in the
+`~photutils.detection.DAOStarFinder` output table. As documented, the
+input data is assumed to be background-subtracted.
+
+
+Quantity arrays in Centroids
+============================
+
+``Quantity`` arrays can now be input to
+`~photutils.centroids.centroid_1dg` and
+`~photutils.centroids.centroid_2dg`.
+
+
+New Sphinx Theme
+================
+
+The documentation now uses the `PyData Sphinx
+<https://pydata-sphinx-theme.readthedocs.io/>`_ theme, which is a
+modern, responsive theme that is easy to read and navigate.

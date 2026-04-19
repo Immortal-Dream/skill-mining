@@ -1,31 +1,29 @@
-﻿"""Clickable real-LLM integration test for mining data/sample_python_source.
+"""Clickable real-LLM integration test for mining a configured sample domain.
 
 Run this test directly from an IDE or with:
 
     python -m pytest test/test_integration_sample_python_source.py
 
 It calls the Right Code API with model gpt-5.2 and writes generated skills to
-a dynamic output directory. Set EASM_INTEGRATION_OUTPUT_DIR to choose a
-persistent destination, or omit it to use pytest's temporary directory. Set
-RIGHT_CODE_API_KEY before running it.
+data/output_skills/sample_python_source. Set RIGHT_CODE_API_KEY before running it.
 """
 
 from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
 
+from easm_pipeline.constants.path_config import DOMAIN_SAMPLE_PYTHON_SOURCE, domain_output_dir, domain_source_dir
 from easm_pipeline.core.llm_infra.clients import LLMClientConfig, StructuredLLMClient
 from easm_pipeline.source_to_skills.main_pipeline import EASMPipeline, PipelineConfig
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIR = REPO_ROOT / "data" / "sample_python_source"
-OUTPUT_DIR = REPO_ROOT / "data" / "output_skills"
+DOMAIN_NAME = DOMAIN_SAMPLE_PYTHON_SOURCE
+SOURCE_DIR = domain_source_dir(DOMAIN_NAME)
+OUTPUT_DIR = domain_output_dir(DOMAIN_NAME)
 
 
-def test_mine_sample_python_source_to_output_skills(tmp_path: Path) -> None:
-    """Mine data/sample_python_source into a caller-provided output directory."""
+def test_mine_sample_python_source_to_output_skills() -> None:
+    """Mine data/sample_source/<domain> into data/output_skills/<domain>."""
 
     assert SOURCE_DIR.is_dir(), f"Source directory does not exist: {SOURCE_DIR}"
     assert any(SOURCE_DIR.glob("*.py")), f"Expected at least one .py file under {SOURCE_DIR}"
@@ -59,8 +57,7 @@ def test_mine_sample_python_source_to_output_skills(tmp_path: Path) -> None:
     assert result.skill_dirs, "Expected at least one generated skill directory"
     assert (OUTPUT_DIR / "skills_registry.json").is_file()
     assert not (OUTPUT_DIR / "scripts").exists(), "scripts must be skill-local, not root-level"
-    assert not (
-            OUTPUT_DIR / "skills").exists(), "skills must be direct child folders, not nested under output_skills/skills"
+    assert not (OUTPUT_DIR / "skills").exists(), "skills must be direct child folders, not nested under output_skills/skills"
     for skill_dir in result.skill_dirs:
         assert skill_dir.is_dir()
         assert skill_dir.parent == OUTPUT_DIR.resolve()

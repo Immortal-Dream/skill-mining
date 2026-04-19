@@ -7,6 +7,7 @@ from pathlib import Path
 from easm_pipeline.core.llm_infra.schemas import CapabilitySlice, ExtractedNode, SkillPayload
 from easm_pipeline.source_to_skills.extraction.java_miner import JavaMiner
 from easm_pipeline.source_to_skills.extraction.dependency_resolver import DependencyResolver
+from easm_pipeline.source_to_skills.extraction.generic_miner import GenericTextMiner
 from easm_pipeline.source_to_skills.extraction.python_miner import PythonMiner
 from easm_pipeline.source_to_skills.main_pipeline import EASMPipeline, PipelineConfig
 from easm_pipeline.source_to_skills.mining.candidate_evaluator import CandidateEvaluator
@@ -99,6 +100,26 @@ class Controller {
         self.assertEqual(nodes[0].docstring, "Fetch a user.")
         self.assertIn('@GetMapping("/users/{id}")', nodes[0].annotations)
         self.assertIn("com.example.UserDto", nodes[0].dependencies)
+
+    def test_generic_text_miner_extracts_full_javascript_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_path = root / "tool.js"
+            source_path.write_text(
+                "// Sum numeric inputs.\n"
+                "function sum(values) {\n"
+                "  return values.reduce((total, value) => total + value, 0);\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            nodes = GenericTextMiner().mine_file(source_path, project_root=root)
+
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(nodes[0].language, "javascript")
+        self.assertEqual(nodes[0].node_type, "file")
+        self.assertEqual(nodes[0].file_path, "tool.js")
+        self.assertIn("Sum numeric inputs.", nodes[0].docstring or "")
 
 
 class SynthesisPackagingTests(unittest.TestCase):
@@ -407,6 +428,61 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(result.skill_dirs[0].name, "run")
             self.assertTrue((result.skill_dirs[0] / "scripts" / "run.py").exists())
             self.assertTrue((output_dir / "skills_registry.json").exists())
+
+    def test_pipeline_builds_java_skill_without_llm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "src"
+            output_dir = root / "output_skills"
+            source_dir.mkdir()
+            (source_dir / "LegacyTool.java").write_text(
+                "package demo;\n\n"
+                "public class LegacyTool {\n"
+                "    /** Reverse a DNA string. */\n"
+                "    public static String reverse(String value) {\n"
+                "        return new StringBuilder(value).reverse().toString();\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            result = EASMPipeline(
+                PipelineConfig(source_dir=source_dir, output_dir=output_dir)
+            ).run()
+
+            self.assertEqual(len(result.capabilities), 1)
+            self.assertEqual(len(result.skill_dirs), 1)
+            skill_dir = result.skill_dirs[0]
+            self.assertTrue((skill_dir / "SKILL.md").exists())
+            self.assertTrue((skill_dir / "scripts" / "LegacyTool.java").exists())
+            registry = (output_dir / "skills_registry.json").read_text(encoding="utf-8")
+            self.assertIn('"language": "java"', registry)
+            self.assertIn('"runtime_hint": "java"', registry)
+
+    def test_pipeline_builds_javascript_skill_without_llm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_dir = root / "src"
+            output_dir = root / "output_skills"
+            source_dir.mkdir()
+            (source_dir / "sequence_tools.js").write_text(
+                "// Reverse a DNA sequence.\n"
+                "function reverseDna(sequence) {\n"
+                "  return sequence.split('').reverse().join('');\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            result = EASMPipeline(
+                PipelineConfig(source_dir=source_dir, output_dir=output_dir)
+            ).run()
+
+            self.assertEqual(len(result.capabilities), 1)
+            self.assertEqual(len(result.skill_dirs), 1)
+            skill_dir = result.skill_dirs[0]
+            self.assertTrue((skill_dir / "scripts" / "sequence_tools.js").exists())
+            skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("node scripts/sequence_tools.js", skill_md)
 
 
 if __name__ == "__main__":
