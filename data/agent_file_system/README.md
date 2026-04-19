@@ -1,13 +1,13 @@
 # Agent File System
 
-This directory is the host-managed filesystem mounted into Docker as `/workspace`
-when the control-layer agent executes skill scripts.
+This directory stores durable host-managed artifacts produced by the
+containerized control-layer agent.
 
-- `input/` - user-provided files that the agent and scripts should read.
-- `output/` - durable outputs produced by agent-triggered skill executions.
-- `work/` - scratch files for a task run.
-- `runs/` - benchmark or ad hoc run records.
 - `logs/` - optional execution logs.
-- `skills/` - runtime copies of skill folders used inside the sandbox.
+- `output/` - durable outputs produced by agent-triggered skill executions.
+
+Input directories and skill directories are no longer stored here. Each agent
+container launch receives explicit host paths for input and skills, then mounts
+them read-only as `/workspace/input` and `/workspace/skills`.
 
 Do not store mined skill packages here. Mined skills belong in `data/output_skills/`.

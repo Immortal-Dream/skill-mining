@@ -2,12 +2,8 @@
 
 from .path_config import (
     AGENT_FILE_SYSTEM_DIR,
-    AGENT_INPUT_DIR,
     AGENT_LOGS_DIR,
     AGENT_OUTPUT_DIR,
-    AGENT_RUNS_DIR,
-    AGENT_SKILLS_DIR,
-    AGENT_WORK_DIR,
     DATA_DIR,
     DEFAULT_DOMAIN,
     DOMAIN_BIOINFORMATICS,
@@ -25,12 +21,8 @@ from .path_config import (
 
 __all__ = [
     "AGENT_FILE_SYSTEM_DIR",
-    "AGENT_INPUT_DIR",
     "AGENT_LOGS_DIR",
     "AGENT_OUTPUT_DIR",
-    "AGENT_RUNS_DIR",
-    "AGENT_SKILLS_DIR",
-    "AGENT_WORK_DIR",
     "DATA_DIR",
     "DEFAULT_DOMAIN",
     "DOMAIN_BIOINFORMATICS",

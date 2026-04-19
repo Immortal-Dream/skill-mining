@@ -11,6 +11,7 @@ import asyncio
 import importlib
 import os
 import re
+import subprocess
 import sys
 from enum import Enum
 from pathlib import Path
@@ -19,7 +20,7 @@ from typing import Any, Sequence
 from loguru import logger
 from pydantic.v1 import BaseModel, Extra, Field, validator
 
-from easm_pipeline.constants.path_config import AGENT_FILE_SYSTEM_DIR, DEFAULT_DOMAIN, domain_output_dir, ensure_agent_file_system
+from easm_pipeline.constants.path_config import DEFAULT_DOMAIN, domain_output_dir
 from easm_pipeline.core.llm_infra.clients import (
     RIGHT_CODE_API_KEY_ENV,
     RIGHT_CODE_DEFAULT_BASE_URL,
@@ -52,6 +53,27 @@ When a skill script only returns stdout but the user asks for a file output,
 call run_skill_script with an extra `output_file` argument such as
 `/workspace/output/result.txt`. The sandbox executor captures stdout into that
 host-managed file without requiring every script to implement file writing.
+"""
+
+CONTAINER_SKILL_AGENT_INSTRUCTIONS = """You are an EASM control-layer agent running inside a Docker container.
+
+Use the mounted Agent Skills as executable capabilities. Select skills from
+their metadata, load full skill instructions only when relevant, and prefer
+executing bundled scripts through the skill tools instead of reimplementing
+their logic.
+
+Filesystem contract:
+- /workspace/input is a read-only mount for user-provided task files.
+- /workspace/skills is a read-only mount containing the loaded skill folders.
+- /workspace/output is a writable mount for durable results.
+- /workspace/logs is a writable mount for logs and diagnostics.
+- /workspace/work is container-local scratch space and may disappear when the
+  container stops.
+
+When a task needs CLI or filesystem interaction, use the provided workspace
+tools to run bash commands, list files, read files, or write output files. Write
+final artifacts under /workspace/output unless the user explicitly requests a
+different mounted output path.
 """
 
 
@@ -96,12 +118,13 @@ class SkillAgentConfig(BaseModel):
         default_factory=lambda: os.getenv(SANDBOX_IMAGE_ENV, DEFAULT_OPENHANDS_RUNTIME_IMAGE),
         min_length=1,
     )
-    sandbox_workspace_root: Path | None = Field(default_factory=lambda: AGENT_FILE_SYSTEM_DIR)
+    sandbox_workspace_root: Path | None = None
     sandbox_network_enabled: bool = False
     sandbox_keep_workspace: bool = True
     sandbox_memory_limit: str | None = "1g"
     sandbox_cpus: float | None = Field(1.0, gt=0)
     tool_timeout_seconds: float | None = Field(120.0, gt=0)
+    enable_workspace_tools: bool = False
 
     class Config:
         extra = Extra.forbid
@@ -168,7 +191,6 @@ class SkillAgentConfig(BaseModel):
     def validate_mounts(self) -> tuple[Path, ...]:
         """Ensure every configured root exists and contains at least one skill."""
 
-        ensure_agent_file_system()
         resolved = self.resolved_skill_directories
         for directory in resolved:
             if not directory.exists():
@@ -222,13 +244,16 @@ class SkillAgentFactory:
             auto_reload=config.auto_reload,
         )
 
-        return pydantic_ai.Agent(
+        agent = pydantic_ai.Agent(
             model=model,
             instructions=config.instructions,
             capabilities=[capability],
             defer_model_check=config.defer_model_check,
             tool_timeout=config.tool_timeout_seconds,
         )
+        if config.enable_workspace_tools:
+            _register_workspace_tools(agent, config.tool_timeout_seconds)
+        return agent
 
 
 class SkillAgentRunResult(BaseModel):
@@ -239,6 +264,10 @@ class SkillAgentRunResult(BaseModel):
 
     class Config:
         extra = Extra.forbid
+
+
+SkillAgentConfig.update_forward_refs(Path=Path, Sequence=Sequence)
+SkillAgentRunResult.update_forward_refs()
 
 
 class MountedSkillAgent:
@@ -338,6 +367,132 @@ def _build_current_python_executor(skills_module: Any, timeout_seconds: int) -> 
         python_executable=sys.executable,
         timeout=timeout_seconds,
     )
+
+
+def _register_workspace_tools(agent: Any, default_timeout_seconds: float | None) -> None:
+    """Register direct container workspace tools on a Pydantic AI agent."""
+
+    workspace_root = Path("/workspace")
+    max_output_chars = 24000
+
+    def resolve_workspace_path(path: str | None, *, default: str = "/workspace") -> Path:
+        raw = (path or default).strip() or default
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = workspace_root / candidate
+        resolved = candidate.resolve(strict=False)
+        try:
+            resolved.relative_to(workspace_root)
+        except ValueError as exc:
+            raise ValueError(f"path must stay under /workspace: {path}") from exc
+        return resolved
+
+    def trim_output(value: str) -> str:
+        if len(value) <= max_output_chars:
+            return value
+        return value[:max_output_chars] + f"\n...[truncated after {max_output_chars} characters]"
+
+    @agent.tool_plain(
+        name="run_bash",
+        description=(
+            "Run a bash command inside the agent container. Use for CLI workflows, "
+            "script execution, file inspection, and data processing under /workspace."
+        ),
+        timeout=default_timeout_seconds,
+    )
+    def run_bash(command: str, cwd: str = "/workspace", timeout_seconds: int = 120) -> str:
+        """Run one bash command in the container workspace."""
+
+        working_dir = resolve_workspace_path(cwd)
+        working_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Agent workspace tool executing bash command in {}", working_dir)
+        try:
+            completed = subprocess.run(
+                ["bash", "-lc", command],
+                cwd=working_dir,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            return trim_output(
+                f"Command timed out after {timeout_seconds} seconds.\n"
+                f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+            )
+
+        output = [
+            f"exit_code: {completed.returncode}",
+            f"stdout:\n{completed.stdout.rstrip()}",
+        ]
+        if completed.stderr:
+            output.append(f"stderr:\n{completed.stderr.rstrip()}")
+        return trim_output("\n\n".join(output))
+
+    @agent.tool_plain(
+        name="list_workspace_files",
+        description="List files under a /workspace path. Use before reading unknown input or output files.",
+    )
+    def list_workspace_files(path: str = "/workspace", max_entries: int = 200) -> str:
+        """List files under one workspace directory."""
+
+        root = resolve_workspace_path(path)
+        if not root.exists():
+            return f"path does not exist: {root}"
+        if root.is_file():
+            return str(root)
+
+        lines: list[str] = []
+        for index, item in enumerate(sorted(root.rglob("*"))):
+            if index >= max_entries:
+                lines.append(f"...[truncated after {max_entries} entries]")
+                break
+            relative = item.relative_to(root)
+            suffix = "/" if item.is_dir() else ""
+            lines.append(f"{relative.as_posix()}{suffix}")
+        return "\n".join(lines) if lines else "(empty)"
+
+    @agent.tool_plain(
+        name="read_workspace_text_file",
+        description="Read a UTF-8 text file under /workspace/input, /workspace/output, /workspace/logs, or skills.",
+    )
+    def read_workspace_text_file(path: str, max_chars: int = 24000) -> str:
+        """Read a workspace text file with output truncation."""
+
+        target = resolve_workspace_path(path)
+        if not target.exists():
+            return f"path does not exist: {target}"
+        if not target.is_file():
+            return f"path is not a file: {target}"
+        content = target.read_text(encoding="utf-8", errors="replace")
+        if len(content) <= max_chars:
+            return content
+        return content[:max_chars] + f"\n...[truncated after {max_chars} characters]"
+
+    @agent.tool_plain(
+        name="write_workspace_text_file",
+        description="Write a UTF-8 text file under /workspace/output or /workspace/logs.",
+    )
+    def write_workspace_text_file(path: str, content: str) -> str:
+        """Write a workspace output or log text file."""
+
+        target = resolve_workspace_path(path)
+        allowed_roots = (workspace_root / "output", workspace_root / "logs")
+        if not any(_is_relative_to(target, root) for root in allowed_roots):
+            raise ValueError("write path must stay under /workspace/output or /workspace/logs")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return f"wrote {len(content)} characters to {target}"
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _looks_like_python_interpreter(command: str) -> bool:

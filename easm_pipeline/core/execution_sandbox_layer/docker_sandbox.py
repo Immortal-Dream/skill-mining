@@ -47,8 +47,8 @@ class DockerSandboxConfig(BaseModel):
     )
     docker_cli: str = Field(default="docker", min_length=1)
     workspace_root: Path | None = Field(
-        default_factory=lambda: AGENT_FILE_SYSTEM_DIR,
-        description="Host directory mounted as /workspace for agent-readable input and output files.",
+        default=None,
+        description="Optional host directory mounted as /workspace for legacy one-shot script execution.",
     )
     container_workspace: str = Field(default=str(DEFAULT_CONTAINER_WORKSPACE), min_length=1)
     timeout_seconds: int = Field(default=120, ge=1)

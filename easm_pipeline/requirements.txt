@@ -20,3 +20,4 @@ docker>=7.1.0            # docker-py: Allows Python to control the host's Docker
 PyYAML>=6.0.1            # Generates and validates SKILL.md frontmatter
 aiohttp>=3.9.0           # For async requests and rate limiting
 python-dotenv>=1.0.1     # Manages secrets (e.g., API keys) from a .env file
+loguru>=0.7.0            # Structured runtime logging
