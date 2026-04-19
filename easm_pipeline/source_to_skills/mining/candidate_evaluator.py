@@ -42,7 +42,7 @@ class CandidateEvaluator:
                 prompt=build_candidate_prompt(capability, dependencies),
                 response_schema=CandidateDecision,
                 system_prompt=(
-                    "Judge whether source logic is worth extracting as a reusable Python CLI skill. "
+                    "Judge whether source logic is worth extracting as a reusable source-language skill artifact. "
                     "Return only the structured decision."
                 ),
             )
@@ -57,15 +57,15 @@ class CandidateEvaluator:
 
 def build_candidate_prompt(capability: CapabilitySlice, dependencies: DependencyContext) -> str:
     return (
-        "Evaluate whether this capability should be extracted as a reusable CLI script skill.\n\n"
+        "Evaluate whether this capability should be extracted as a reusable source-language skill artifact.\n\n"
         "Extract only when:\n"
-        "- The logic has clear input/output boundaries and can run standalone.\n"
+        "- The logic has clear input/output boundaries and can be packaged as a standalone script or source artifact.\n"
         "- The logic captures domain expertise or reusable engineering practice.\n"
         "- The logic can be reused across projects without heavy business coupling.\n\n"
         "Skip when:\n"
         "- It depends on database sessions, web request contexts, project settings, or instance state.\n"
         "- It is a trivial wrapper or is too business-specific.\n"
-        "- It has unsafe side effects or cannot be expressed through CLI inputs/stdout.\n\n"
+        "- It has unsafe side effects or cannot be executed safely through a packaged runtime or sandbox.\n\n"
         "Use skill_id format lower-kebab-case, for example find-connected-components. "
         "Do not start skill_id with skill_ or skill-.\n\n"
         f"Dependency context:\n{dependencies.json(indent=2)}\n\n"
@@ -80,15 +80,13 @@ def _deterministic_skip(
     if len(capability.nodes) != 1:
         return _skip(capability, "module-level multi-function distillation is not enabled yet")
     node = capability.nodes[0]
-    if node.language != "python":
-        return _skip(capability, "only Python CLI script distillation is currently supported")
     if node.name.startswith("_"):
         return _skip(capability, "private helper functions are not promoted to public skills")
-    if _is_async_function(node):
+    if node.language == "python" and _is_async_function(node):
         return _skip(capability, "async functions require event-loop specific CLI design")
-    if _has_varargs(node):
+    if node.language == "python" and _has_varargs(node):
         return _skip(capability, "varargs or kwargs require custom CLI design")
-    if _is_bound_method(node):
+    if node.language == "python" and _is_bound_method(node):
         return _skip(capability, "class-bound methods depend on instance or class state")
     if dependencies.business_coupling:
         return _skip(capability, f"business coupling detected: {', '.join(dependencies.business_coupling)}")
@@ -107,7 +105,7 @@ def _fallback_extract_decision(
     tags = tuple(dict.fromkeys(_infer_tags(node)))
     return CandidateDecision(
         decision="extract",
-        reason="function has a standalone Python boundary and reusable computation logic",
+        reason="source logic has a reusable standalone boundary and can be packaged as a source-language skill",
         skill_id=slugify(node.name, max_length=64),
         source=_source_name(node),
         tags=tags,
@@ -166,10 +164,15 @@ def _has_varargs(node: ExtractedNode) -> bool:
 
 
 def _is_too_trivial(node: ExtractedNode) -> bool:
+    if node.node_type == "file":
+        return len(node.raw_code.splitlines()) <= 2 and not node.docstring
+    if node.language != "python":
+        lines = [line for line in textwrap.dedent(node.raw_code).splitlines() if line.strip()]
+        return len(lines) <= 3 and not node.docstring
     try:
         module = ast.parse(textwrap.dedent(node.raw_code))
     except SyntaxError:
-        return False
+        return len(node.raw_code.splitlines()) <= 3 and not node.docstring
     function = next((child for child in module.body if isinstance(child, ast.FunctionDef)), None)
     if function is None:
         return False

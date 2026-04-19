@@ -1,12 +1,14 @@
 {
   "version": 1,
-  "generated_at": "2026-04-13T18:05:43.146540+00:00",
+  "generated_at": "2026-04-16T20:12:56.982331+00:00",
   "skills": [
     {
       "skill_id": "compute-gc-content",
       "script": "compute-gc-content/scripts/compute_gc_content.py",
       "doc": "compute-gc-content/SKILL.md",
-      "source": "sequence_tools.py: compute_gc_content(sequence: str) -> float",
+      "language": "python",
+      "runtime_hint": "python",
+      "source": "sequence_tools.py:compute_gc_content",
       "source_file": "sequence_tools.py",
       "source_span": {
         "start_line": 1,
@@ -14,11 +16,11 @@
       },
       "tags": [
         "bioinformatics",
-        "sequence",
         "dna",
+        "sequence",
         "gc-content",
-        "text-processing",
-        "cli"
+        "utility",
+        "python"
       ],
       "dependencies": [],
       "status": "active",
@@ -28,7 +30,7 @@
         "security_findings": [],
         "help_exit_code": 0,
         "example_exit_code": null,
-        "stdout_sample": "usage: compute_gc_content [-h] [--sequence SEQUENCE] [--input INPUT]\n                          [--format {raw,fasta}] [--strict]\n                          [--ignore-ambiguous] [--output {json,text}]\n\nCompute GC content (fraction of G/C bases) for one or more DNA sequences.\n\noptions:\n  -h, --help            show this help message and exit\n  --sequence SEQUENCE   DNA sequence provided directly on the command line.\n                        Can be repeated.\n  --input INPUT         Read sequences from a file path, or '-' to read from\n                        stdin. Supports raw or FASTA based on --format.\n  --format {raw,fasta}  Input format: raw or fasta.\n  --strict              If set, error on invalid characters (anything other\n                        than A/C/G/T/N, ignoring whitespace).\n  --ignore-ambiguous    If set, compute GC fraction over only A/C/G/T bases\n                        (exclude N/ambiguous from denominator).\n  --output {json,text}  Output format: json or text.\n",
+        "stdout_sample": "usage: compute_gc_content.py [-h] --sequence SEQUENCE [--output {json,text}]\n\nCompute GC content (fraction) of a DNA sequence.\n\noptions:\n  -h, --help            show this help message and exit\n  --sequence SEQUENCE   DNA sequence string to analyze (e.g., ACGTACGT).\n  --output {json,text}  Output format.\n",
         "stderr_sample": ""
       }
     },
@@ -36,7 +38,9 @@
       "skill_id": "find-connected-components",
       "script": "find-connected-components/scripts/find_connected_components.py",
       "doc": "find-connected-components/SKILL.md",
-      "source": "graph_tools.py:function find_connected_components(edges)",
+      "language": "python",
+      "runtime_hint": "python",
+      "source": "graph_tools.py:function find_connected_components(edges: list[tuple[str, str]]) -> list[set[str]]",
       "source_file": "graph_tools.py",
       "source_span": {
         "start_line": 1,
@@ -46,8 +50,9 @@
         "graph",
         "connected-components",
         "undirected-graph",
-        "algorithm",
-        "cli"
+        "dfs",
+        "utility",
+        "python"
       ],
       "dependencies": [],
       "status": "active",
@@ -57,7 +62,7 @@
         "security_findings": [],
         "help_exit_code": 0,
         "example_exit_code": null,
-        "stdout_sample": "usage: find_connected_components [-h] [--edges-json EDGES_JSON]\n                                 [--edges-file EDGES_FILE] [--edge EDGE]\n                                 [--include-isolated] [--node NODE] [--sort]\n                                 [--output {json,text}]\n\nCompute connected components in an undirected graph from an edge list.\n\noptions:\n  -h, --help            show this help message and exit\n  --edges-json EDGES_JSON\n                        Edges as JSON string or '@path'. Formats: [[\"a\",\"b\"],\n                        ...] or [{\"left\":\"a\",\"right\":\"b\"}, ...].\n  --edges-file EDGES_FILE\n                        Path to a JSON file containing edges. Same formats as\n                        --edges-json.\n  --edge EDGE           Add one edge as 'LEFT,RIGHT'. Can be provided multiple\n                        times.\n  --include-isolated    If set, include isolated nodes (nodes with no edges)\n                        as singleton components. Provide nodes via --node.\n  --node NODE           Declare a node (useful for isolated nodes). Can be\n                        provided multiple times.\n  --sort                Sort nodes within components and sort components by\n                        (size desc, lexicographic) for stable output.\n  --output {json,text}  Output format: 'json' or 'text'. Default: json.\n",
+        "stdout_sample": "usage: find_connected_components.py [-h]\n                                    (--edge EDGE | --edges-json EDGES_JSON | --edges-json-file EDGES_JSON_FILE)\n                                    [--delimiter DELIMITER] [--sort]\n                                    [--output {json,text}]\n\nFind connected components in an undirected graph from an edge list.\n\noptions:\n  -h, --help            show this help message and exit\n  --edge EDGE           An edge specified as 'LEFT,RIGHT' (repeatable).\n  --edges-json EDGES_JSON\n                        JSON string representing a list of 2-item edges, e.g.\n                        '[[\"a\",\"b\"],[\"c\",\"d\"]]'.\n  --edges-json-file EDGES_JSON_FILE\n                        Path to a JSON file containing a list of 2-item edges.\n  --delimiter DELIMITER\n                        Delimiter used in --edge values (default: ',').\n  --sort                Sort nodes within each component for stable output.\n  --output {json,text}  Output format (default: json).\n",
         "stderr_sample": ""
       }
     },
@@ -65,7 +70,9 @@
       "skill_id": "reverse-complement-dna",
       "script": "reverse-complement-dna/scripts/reverse_complement_dna.py",
       "doc": "reverse-complement-dna/SKILL.md",
-      "source": "sequence_tools.py:function reverse_complement(sequence: str) -> str",
+      "language": "python",
+      "runtime_hint": "python",
+      "source": "sequence_tools.py: reverse_complement(sequence: str) -> str",
       "source_file": "sequence_tools.py",
       "source_span": {
         "start_line": 10,
@@ -74,9 +81,8 @@
       "tags": [
         "bioinformatics",
         "dna",
-        "string-processing",
         "sequence",
-        "cli-candidate"
+        "string-processing"
       ],
       "dependencies": [],
       "status": "active",
@@ -86,7 +92,7 @@
         "security_findings": [],
         "help_exit_code": 0,
         "example_exit_code": null,
-        "stdout_sample": "usage: reverse_complement_dna.py [-h] --sequence SEQUENCE\n                                 [--output {json,text}]\n\nReturn the reverse complement of a DNA sequence.\n\noptions:\n  -h, --help            show this help message and exit\n  --sequence SEQUENCE   str value for sequence.\n  --output {json,text}  Output format.\n",
+        "stdout_sample": "usage: reverse_complement_dna [-h] --sequence SEQUENCE [--output {json,text}]\n\nCompute the reverse complement of a DNA sequence.\n\noptions:\n  -h, --help            show this help message and exit\n  --sequence SEQUENCE   Input DNA sequence (A,C,G,T; case preserved for these\n                        bases).\n  --output {json,text}  Output format.\n",
         "stderr_sample": ""
       }
     },
@@ -94,6 +100,8 @@
       "skill_id": "summarize-numeric-columns",
       "script": "summarize-numeric-columns/scripts/summarize_numeric_columns.py",
       "doc": "summarize-numeric-columns/SKILL.md",
+      "language": "python",
+      "runtime_hint": "python",
       "source": "table_tools.py:summarize_numeric_columns",
       "source_file": "table_tools.py",
       "source_span": {
@@ -101,11 +109,11 @@
         "end_line": 16
       },
       "tags": [
+        "python",
         "data-processing",
-        "statistics",
         "tables",
-        "aggregation",
-        "cli-candidate"
+        "statistics",
+        "utility"
       ],
       "dependencies": [],
       "status": "active",
@@ -115,7 +123,7 @@
         "security_findings": [],
         "help_exit_code": 0,
         "example_exit_code": null,
-        "stdout_sample": "usage: summarize_numeric_columns.py [-h] --rows-json ROWS\n                                    [--output {json,text}]\n\nCompute min, max, and mean for numeric columns in row dictionaries.\n\noptions:\n  -h, --help            show this help message and exit\n  --rows-json ROWS      JSON value for rows.\n  --output {json,text}  Output format.\n",
+        "stdout_sample": "usage: summarize_numeric_columns.py [-h] [--input-json INPUT_JSON]\n                                    [--include INCLUDE] [--exclude EXCLUDE]\n                                    [--allow-numeric-strings]\n                                    [--output {json,text}] [--pretty]\n\nSummarize numeric columns across a JSON array of row objects. Reads from\n--input-json or stdin.\n\noptions:\n  -h, --help            show this help message and exit\n  --input-json INPUT_JSON\n                        JSON string representing a list of row objects\n                        (list[dict]). If omitted or empty, read JSON from\n                        stdin.\n  --include INCLUDE     Comma-separated list of column names to include\n                        (optional).\n  --exclude EXCLUDE     Comma-separated list of column names to exclude\n                        (optional).\n  --allow-numeric-strings\n                        Treat numeric-looking strings (e.g., '3.14') as\n                        numbers.\n  --output {json,text}  Output format.\n  --pretty              Pretty-print JSON output (only applies to --output\n                        json).\n",
         "stderr_sample": ""
       }
     }

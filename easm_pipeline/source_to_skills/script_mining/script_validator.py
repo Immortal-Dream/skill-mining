@@ -1,8 +1,9 @@
-﻿"""Static and dynamic validation for generated skill scripts."""
+"""Static validation for generated skill scripts."""
 
 from __future__ import annotations
 
 import ast
+import re
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,22 @@ DANGEROUS_CALLS = {
     "requests.delete": "network calls are not allowed in mined scripts",
 }
 
+JAVA_DANGEROUS_PATTERNS = (
+    re.compile(r"Runtime\.getRuntime\(\)\.exec\s*\("),
+    re.compile(r"new\s+ProcessBuilder\s*\("),
+    re.compile(r"\bFiles\.delete(?:IfExists)?\s*\("),
+    re.compile(r"\bSystem\.exit\s*\("),
+)
+
+GENERIC_DANGEROUS_PATTERNS = (
+    re.compile(r"\brm\s+-rf\b"),
+    re.compile(r"\bcurl\b"),
+    re.compile(r"\bwget\b"),
+    re.compile(r"\bexec\s*\("),
+    re.compile(r"\bsubprocess\b"),
+    re.compile(r"\bProcessBuilder\b"),
+)
+
 
 class ScriptValidator:
     """Validate generated scripts before packaging."""
@@ -38,11 +55,11 @@ class ScriptValidator:
         stdout_sample: str | None = None
         stderr_sample: str | None = None
 
-        if not static_errors and not security_findings:
+        if script.language == "python" and script.supports_help and not static_errors and not security_findings:
             help_exit_code, stdout_sample, stderr_sample = _run_help(script)
 
         dynamic_errors: list[str] = []
-        if help_exit_code not in (None, 0):
+        if script.language == "python" and script.supports_help and help_exit_code not in (None, 0):
             dynamic_errors.append("--help command failed")
 
         passed = not static_errors and not security_findings and not dynamic_errors
@@ -67,6 +84,14 @@ class ScriptValidator:
 
 
 def _static_validate(script: GeneratedScript) -> tuple[list[str], list[str]]:
+    if script.language == "python":
+        return _static_validate_python(script)
+    if script.language == "java":
+        return _static_validate_java(script)
+    return _static_validate_generic(script)
+
+
+def _static_validate_python(script: GeneratedScript) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     findings: list[str] = []
     try:
@@ -75,12 +100,13 @@ def _static_validate(script: GeneratedScript) -> tuple[list[str], list[str]]:
         return [f"syntax error: {exc.msg} at line {exc.lineno}"], findings
 
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
-    if "core_function" not in functions:
-        errors.append("missing core_function")
-    if "main" not in functions:
-        errors.append("missing main")
-    if "core_function" in functions:
-        _validate_type_hints(functions["core_function"], errors)
+    if script.entry_symbol == "core_function":
+        if "core_function" not in functions:
+            errors.append("missing core_function")
+        if "main" not in functions:
+            errors.append("missing main")
+        if "core_function" in functions:
+            _validate_type_hints(functions["core_function"], errors)
 
     imports = _import_roots(tree)
     banned_imports = sorted(imports & {"subprocess", "requests", "shutil"})
@@ -97,6 +123,34 @@ def _static_validate(script: GeneratedScript) -> tuple[list[str], list[str]]:
             if len(value) >= 3 and (":/" in value or value.startswith("/")):
                 findings.append("hard-coded absolute path string detected")
 
+    return errors, sorted(set(findings))
+
+
+def _static_validate_java(script: GeneratedScript) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    findings: list[str] = []
+    stripped = script.script_text.strip()
+    if "class " not in stripped and "interface " not in stripped and "record " not in stripped:
+        errors.append("java source must contain a type declaration")
+    for pattern in JAVA_DANGEROUS_PATTERNS:
+        if pattern.search(stripped):
+            findings.append(f"dangerous java pattern detected: {pattern.pattern}")
+    if _contains_absolute_path_literal(stripped):
+        findings.append("hard-coded absolute path string detected")
+    return errors, sorted(set(findings))
+
+
+def _static_validate_generic(script: GeneratedScript) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    findings: list[str] = []
+    stripped = script.script_text.strip()
+    if not stripped:
+        errors.append("script_text must be non-empty")
+    for pattern in GENERIC_DANGEROUS_PATTERNS:
+        if pattern.search(stripped):
+            findings.append(f"dangerous pattern detected: {pattern.pattern}")
+    if _contains_absolute_path_literal(stripped):
+        findings.append("hard-coded absolute path string detected")
     return errors, sorted(set(findings))
 
 
@@ -141,4 +195,6 @@ def _run_help(script: GeneratedScript) -> tuple[int, str, str]:
     return completed.returncode, completed.stdout[:2000], completed.stderr[:2000]
 
 
-
+def _contains_absolute_path_literal(text: str) -> bool:
+    normalized = text.replace("\\", "/")
+    return ":/" in normalized or '"/' in normalized or "'/" in normalized

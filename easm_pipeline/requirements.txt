@@ -1,7 +1,23 @@
-pydantic>=1.10.17,<3
-aiohttp>=3.9,<4
-loguru>=0.7,<1
-tree-sitter>=0.23,<0.26
-tree-sitter-python>=0.23,<0.24
-tree-sitter-java>=0.23,<0.24
-pyyaml>=6.0,<7
+
+# Agent & LLM Framework
+# Core dependencies for LLM calls, tool registration, and progressive skill loading
+pydantic>=2.9.0
+pydantic-ai>=1.71
+pydantic-ai-skills>=0.7.0  # Core library aligned with Anthropic's Agent Skills specs
+
+# Source Code Extraction (AST Parsing)
+# Core dependencies to accurately extract Python/Java functions, classes, and comments without compiling
+tree-sitter>=0.21.0
+tree-sitter-python
+tree-sitter-java
+
+# Execution Sandbox
+# Core dependencies to dynamically start/stop local containers for safe code execution
+docker>=7.1.0            # docker-py: Allows Python to control the host's Docker
+
+# Utilities & Infrastructure
+# Core dependencies for YAML generation, rate limiting, and environment variable management
+PyYAML>=6.0.1            # Generates and validates SKILL.md frontmatter
+aiohttp>=3.9.0           # For async requests and rate limiting
+python-dotenv>=1.0.1     # Manages secrets (e.g., API keys) from a .env file
+loguru>=0.7.0            # Structured runtime logging

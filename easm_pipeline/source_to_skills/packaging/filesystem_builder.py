@@ -84,7 +84,7 @@ class FilesystemBuilder:
         A generated skill must be portable as a single directory:
 
         output_root/<skill_id>/SKILL.md
-        output_root/<skill_id>/scripts/<script>.py
+        output_root/<skill_id>/scripts/<script>
         output_root/<skill_id>/references/<optional-reference>
         """
 

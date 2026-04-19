@@ -20,6 +20,8 @@ class RegistryEntry(BaseModel):
     skill_id: str
     script: str
     doc: str
+    language: str | None = None
+    runtime_hint: str | None = None
     source: str
     source_file: str | None = None
     source_span: dict[str, int] = Field(default_factory=dict)
@@ -94,6 +96,8 @@ def _entry_from_package(package: RegisteredSkillPackage) -> RegistryEntry:
         skill_id=package.script.skill_id,
         script=f"{package.script.skill_id}/scripts/{package.script.filename}",
         doc=f"{package.script.skill_id}/SKILL.md",
+        language=package.script.language,
+        runtime_hint=package.script.runtime_hint,
         source=package.decision.source,
         source_file=package.source_file,
         source_span=package.source_span,

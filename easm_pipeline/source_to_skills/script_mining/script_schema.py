@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic.v1 import BaseModel, Extra, Field, validator
 
 
-SCRIPT_FILENAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_]{0,74}[a-z0-9])?\.py$")
+SCRIPT_FILENAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,118}[A-Za-z0-9])?$")
 SKILL_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 
 
@@ -34,17 +34,22 @@ class ScriptCliArgument(BaseModel):
 
 
 class GeneratedScript(BaseModel):
-    """A distilled Python CLI script ready for validation and packaging."""
+    """A packaged skill script, either distilled or source-preserving."""
 
     skill_id: str = Field(..., max_length=64)
+    language: str = Field(..., min_length=1, max_length=64)
+    runtime_hint: str = Field(..., min_length=1, max_length=64)
     filename: str = Field(..., max_length=80)
     description: str = Field(..., min_length=1, max_length=512)
     script_text: str = Field(..., min_length=1)
     entry_function: str = Field("core_function", min_length=1)
+    entry_symbol: str | None = None
     cli_arguments: tuple[ScriptCliArgument, ...] = Field(default_factory=tuple)
     dependencies: tuple[str, ...] = Field(default_factory=tuple)
     tags: tuple[str, ...] = Field(default_factory=tuple)
     source: str = Field(..., min_length=1)
+    example_command: str = Field(..., min_length=1, max_length=512)
+    supports_help: bool = False
 
     class Config:
         extra = Extra.forbid
@@ -62,7 +67,7 @@ class GeneratedScript(BaseModel):
     @classmethod
     def _validate_filename(cls, value: str) -> str:
         if not SCRIPT_FILENAME_RE.fullmatch(value):
-            raise ValueError("filename must be lower_snake_case .py without a skill_ prefix")
+            raise ValueError("filename must be a safe single-file script or source filename")
         if value.startswith("skill_"):
             raise ValueError("filename must not start with skill_")
         return value
@@ -71,14 +76,8 @@ class GeneratedScript(BaseModel):
     @classmethod
     def _validate_script_text_shape(cls, value: str) -> str:
         stripped = value.strip()
-        if not stripped.startswith("#!/usr/bin/env python3"):
-            raise ValueError("script_text must start with a python3 shebang")
-        required_snippets = ("import argparse", "import json", "import sys", "def core_function", "def main()")
-        missing = [snippet for snippet in required_snippets if snippet not in stripped]
-        if missing:
-            raise ValueError(f"script_text missing required snippets: {', '.join(missing)}")
-        if 'if __name__ == "__main__"' not in stripped:
-            raise ValueError("script_text must call main under __main__")
+        if not stripped:
+            raise ValueError("script_text must contain source text")
         return stripped + "\n"
 
 

@@ -1,0 +1,7 @@
+# Runtime files in this mounted agent output filesystem are host-managed
+# artifacts. Keep the directory structure in git, but do not commit generated
+# outputs or execution logs.
+output/*
+logs/*
+!output/.gitkeep
+!logs/.gitkeep

@@ -115,9 +115,6 @@ class SkillValidator:
         if "## When to use" not in value:
             errors.append("instructions: must include ## When to use")
         errors.extend(_validate_quick_start_numbering(value))
-        if "scripts/" in value:
-            if "--help" not in value:
-                errors.append("instructions: script references must tell Claude to run --help first")
         return errors
 
     def _validate_bundle_filenames(self, files: Mapping[str, str], folder: str) -> list[str]:
@@ -147,8 +144,6 @@ class SkillValidator:
         errors: list[str] = []
         if "## Scripts" not in instructions:
             errors.append("instructions: skills with scripts must include ## Scripts")
-        if "--help" not in instructions:
-            errors.append("instructions: skills with scripts must tell Claude to run --help first")
         for filename in payload.scripts_dict:
             script_path = f"scripts/{filename}"
             if script_path not in instructions:

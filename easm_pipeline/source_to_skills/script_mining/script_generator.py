@@ -91,14 +91,19 @@ class ScriptGenerator:
         )
         return GeneratedScript(
             skill_id=skill_id,
+            language="python",
+            runtime_hint="python",
             filename=filename,
             description=description,
             script_text=script_text,
             entry_function="core_function",
+            entry_symbol="core_function",
             cli_arguments=cli_arguments,
             dependencies=decision.dependencies,
             tags=decision.tags,
             source=decision.source,
+            example_command=_example_command(filename, cli_arguments),
+            supports_help=True,
         )
 
 
@@ -118,6 +123,10 @@ def build_script_prompt(
         "- Expose semantic argparse flags, not only generic --args-json wrappers.\n"
         "- Use lower-kebab-case skill_id without a skill_ prefix.\n"
         "- Use lower_snake_case filename without a skill_ prefix.\n"
+        "- Set language to python and runtime_hint to python.\n"
+        "- Set entry_symbol to core_function.\n"
+        "- Set example_command to a real runnable python scripts/<filename> invocation with semantic flags and --output json.\n"
+        "- Set supports_help to true.\n"
         "- Include --output with choices json/text and default json.\n"
         "- Print normal results to stdout.\n"
         "- Print errors to stderr and exit non-zero on failure.\n"
@@ -365,5 +374,25 @@ def _escape_string(value: str) -> str:
 
 def _escape_docstring(value: str) -> str:
     return value.replace('"""', "'''").replace("\n", " ")
+
+
+def _example_command(filename: str, cli_arguments: tuple[ScriptCliArgument, ...]) -> str:
+    parts = [f"python scripts/{filename}"]
+    for argument in cli_arguments:
+        parts.append(f"{argument.flag} '{_example_value(argument)}'")
+    parts.append("--output json")
+    return " ".join(parts)
+
+
+def _example_value(argument: ScriptCliArgument) -> str:
+    if argument.value_type == "json":
+        return "{}"
+    if argument.value_type == "int":
+        return "10"
+    if argument.value_type == "float":
+        return "1.0"
+    if argument.value_type == "bool":
+        return "true"
+    return "sample"
 
 
